@@ -328,3 +328,30 @@ energies of the wrong nodes. Any CLIC run using `sorter:` has all three.
 `linformer_seq_len: 168`, decoder back to `torch`. Measured 10,165,459 params vs quadratic
 10,126,115 (within 0.4%) vs the k=256 arm's 12,451,027. Brief: `SMALL_K_EXPERIMENT.md`.
 Completes a 2x2: {k=256, k=32} x {file order, phi-sorted}.
+
+## 5. Quadratic arm: matched-epoch result (2026-09-15)
+
+Run `clic_v6_quadratic_20260911-T042113` (job 7598123, `quadratic_polaris.yaml`, commit
+6dbb565 tree; no sorting, no cos/sin fix -- same inputs as the Linformer arm). Died at
+epoch 162 on `Disk quota exceeded` while copying the checkpoint from node-local $TMPDIR
+into $HOME (51 GB used of 45 GB quota); the epoch-162 file is a 32 MiB truncation and was
+deleted. Resumed from epoch 161 as job 7624470 (06:00 walltime, ~38 epochs).
+
+Validation loss at matched epoch, same OneCycle schedule, from checkpoint filenames:
+
+| epoch | quadratic | Linformer k=256 | gap |
+|---|---|---|---|
+| 160 | 4.00455 | 4.56788 | 0.563 |
+| 161 | 4.01215 | 4.57743 | 0.565 |
+| 199 | (pending) | 4.51461 | -- |
+
+The quadratic arm at epoch 161 is already 0.50 below the Linformer arm's *final* loss.
+Epoch-to-epoch jitter on either arm is ~0.01, so this is not noise. The arms differ in
+exactly four config lines (encoder attn_type, decoder attn_type, value_residual, name)
+and the quadratic arm has 2.3M FEWER parameters.
+
+Interpretation, pending jet IQR from the eval: consistent with sec. 3b and with Maria's
+hypothesis (2026-09-15) that the poster's poor physics came from the non-functional
+decoder mask under Linformer rather than from Linformer per se. Helen's encoder-only
+k=32 arm (decoder quadratic, mask attention genuinely active) is the decomposition test:
+if it lands near the quadratic arm, the decoder mask was the whole story.
