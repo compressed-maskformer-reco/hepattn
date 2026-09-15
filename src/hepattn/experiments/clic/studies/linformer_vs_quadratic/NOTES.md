@@ -290,3 +290,41 @@ being avoided. So it is a genuine incompatibility, not a bug to patch.
 **Correction to the poster's defect 3.** It says k=256 > n=168 "expanded the sequence
 instead of compressing it". True, but incomplete: the surplus columns are then thrown
 away by (ii), and the mask they were protecting does not work anyway.
+
+## 4. Sorting the node sequence for Linformer (2026-09-10 .. 09-15)
+
+Lindsey's suggestion: sort hits in phi so Linformer's position-indexed projection `E[n, k]`
+has a geometric meaning. Quadratic attention is permutation-equivariant and the
+`FourierPositionEncoder` acts on each node's own eta/phi, not its index, so sorting is a
+strict no-op for the quadratic arm -- a clean control. Precedent: Sun et al.
+(arXiv:2510.24784, sec. 2.1) sort constituents by pT and run k=2.
+
+Implemented as a **data-reader** option, `data.sort_nodes_by: phi|eta|type_phi|type_eta`
+(`pflow_data.py`, `node_sort_order`). One permutation is applied to every per-node tensor
+AND to the incidence-matrix columns. Tests: `tests/experiments/clic/test_node_sort.py`
+(15 tests; mutation-checked: no-incidence-permute fails 4, no-feature-permute fails 4,
+identity order fails 8, dropped block key fails 1).
+
+### 4a. Why not the built-in `hepattn.utils.sorter.Sorter`? (measured, not read)
+
+It is wired into `MaskFormer(sorter=...)` and used by two trackml configs, but for CLIC it
+misaligns truth and inputs. Demonstrated on one real event through `load_event`:
+
+| tensor | moved by `Sorter`? | consumer |
+|---|---|---|
+| `node_valid` | yes | padding |
+| `particle_node_valid` | yes | mask BCE/dice |
+| `particle_incidence` | **no** (key lacks "node") | incidence KL, `task.py:1351,1366` |
+| `x["inputs"]["node_e"/"node_pt"/...]` | **no** | regression proxy, `task.py:1490` |
+
+After `sort_targets`, `particle_node_valid` and `particle_incidence > cut` disagree on 5 of
+30 (query, node) cells over the 5 real nodes. So with the built-in sorter the mask head
+trains in phi order, the incidence head trains in file order, and the proxy sums the
+energies of the wrong nodes. Any CLIC run using `sorter:` has all three.
+
+### 4b. Small-k encoder-only arm (Helen)
+
+`link32_polaris.yaml` / `link32_sortphi_polaris.yaml`: encoder `linformer_proj_dim: 32`,
+`linformer_seq_len: 168`, decoder back to `torch`. Measured 10,165,459 params vs quadratic
+10,126,115 (within 0.4%) vs the k=256 arm's 12,451,027. Brief: `SMALL_K_EXPERIMENT.md`.
+Completes a 2x2: {k=256, k=32} x {file order, phi-sorted}.
