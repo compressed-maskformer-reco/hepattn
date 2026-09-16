@@ -139,10 +139,16 @@ model:
       matcher:
         class_path: hepattn.models.matcher.Matcher
         init_args:
-          default_solver: scipy
+          # lap1015_late needs the GIL-releasing build of the extension (src/lap1015);
+          # rebuild it if the env is reinstalled, otherwise 16-thread matching serialises
+          # and this is ~2x slower than scipy. Invalid permutations fall back to scipy.
+          default_solver: lap1015_late
           adaptive_solver: false
           parallel_solver: true
           n_jobs: 16
+          # Opt-in GPU solver, worth it only when training is host-bound (e.g. one B200):
+          # needs the torch-linear-assignment build from setup/build_torch_linear_assignment.sh.
+          # device_solver: jv
 
       tasks:
         class_path: torch.nn.ModuleList

@@ -126,3 +126,6 @@ tmp/
 src/hepattn/experiments/cld/plots/
 src/hepattn/experiments/cld/eval/
 src/hepattn/experiments/trackml/eval/
+
+# Out-of-environment builds, e.g. setup/build_torch_linear_assignment.sh
+vendor/
