@@ -22,16 +22,16 @@ data:
 
   num_objects: &num_particles 150
 
-  train_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/train_clic_fix.root
-  valid_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/val_clic_fix.root
-  test_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/test_clic_common_infer.root
+  train_path: /home/jovyan/hepattn-data/train_clic_fix.root
+  valid_path: /home/jovyan/hepattn-data/val_clic_fix.root
+  test_path: /home/jovyan/hepattn-data/test_clic_common_infer.root
 
   num_workers: 16
   num_train: -1
   num_test: -1
   num_val: 5000
 
-  batch_size: 2048
+  batch_size: 512
   incidence_cutval: 0.01
 
   scale_dict_path: &scale_dict_path configs/clic_var_transform.yaml
@@ -39,7 +39,7 @@ data:
 trainer:
   max_epochs: 200
   accelerator: gpu
-  devices: 4
+  devices: 2
   precision: bf16-mixed
   gradient_clip_val: 0.1
   log_every_n_steps: 50
@@ -78,7 +78,7 @@ model:
 
   lrs_config:
     initial: 1e-6
-    max: 8e-5
+    max: 2e-4
     end: 1e-6
     pct_start: 0.05
     weight_decay: 1e-4
@@ -118,7 +118,7 @@ model:
         init_args:
           num_layers: 6
           dim: *dim
-          attn_type: flash-varlen
+          attn_type: linformer
           hybrid_norm: true
           value_residual: true
           num_register_tokens: 8
@@ -135,20 +135,15 @@ model:
           hybrid_norm: true
           attn_kwargs:
             num_heads: 16
+            attn_type: linformer
 
       matcher:
         class_path: hepattn.models.matcher.Matcher
         init_args:
-          # lap1015_late needs the GIL-releasing build of the extension (src/lap1015);
-          # rebuild it if the env is reinstalled, otherwise 16-thread matching serialises
-          # and this is ~2x slower than scipy. Invalid permutations fall back to scipy.
-          default_solver: lap1015_late
+          default_solver: scipy
           adaptive_solver: false
           parallel_solver: true
           n_jobs: 16
-          # Opt-in GPU solver, worth it only when training is host-bound (e.g. one B200):
-          # needs the torch-linear-assignment build from setup/build_torch_linear_assignment.sh.
-          # device_solver: jv
 
       tasks:
         class_path: torch.nn.ModuleList

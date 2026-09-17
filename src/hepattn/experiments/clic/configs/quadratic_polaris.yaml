@@ -1,4 +1,4 @@
-name: clic_v6
+name: clic_v6_quadratic
 seed_everything: 42
 
 data:
@@ -22,21 +22,22 @@ data:
 
   num_objects: &num_particles 150
 
-  train_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/train_clic_fix.root
-  valid_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/val_clic_fix.root
-  test_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/test_clic_common_infer.root
+  train_path: /eagle/PBS_PROJECT/clic/train_clic_fix.root
+  valid_path: /eagle/PBS_PROJECT/clic/val_clic_fix.root
+  test_path: /eagle/PBS_PROJECT/clic/val_clic_fix.root
 
-  num_workers: 16
+  num_workers: 8
   num_train: -1
   num_test: -1
   num_val: 5000
 
-  batch_size: 2048
+  batch_size: 256
   incidence_cutval: 0.01
 
   scale_dict_path: &scale_dict_path configs/clic_var_transform.yaml
 
 trainer:
+  strategy: ddp_find_unused_parameters_true
   max_epochs: 200
   accelerator: gpu
   devices: 4
@@ -52,7 +53,6 @@ trainer:
       project: hepattn-clic
 
   callbacks:
-    - class_path: hepattn.callbacks.Compile
     - class_path: hepattn.callbacks.InferenceTimer
     - class_path: hepattn.callbacks.SaveConfig
     - class_path: hepattn.callbacks.Checkpoint
@@ -74,14 +74,14 @@ trainer:
         refresh_rate: 50
 
 model:
-  optimizer: Lion
+  optimizer: AdamW
 
   lrs_config:
     initial: 1e-6
-    max: 8e-5
+    max: 1e-4
     end: 1e-6
     pct_start: 0.05
-    weight_decay: 1e-4
+    weight_decay: 0.03
     skip_scheduler: false
 
   mtl: false
@@ -118,7 +118,7 @@ model:
         init_args:
           num_layers: 6
           dim: *dim
-          attn_type: flash-varlen
+          attn_type: torch  # flash-varlen unavailable on Polaris (no flash_attn); torch SDPA is exact
           hybrid_norm: true
           value_residual: true
           num_register_tokens: 8
@@ -139,16 +139,10 @@ model:
       matcher:
         class_path: hepattn.models.matcher.Matcher
         init_args:
-          # lap1015_late needs the GIL-releasing build of the extension (src/lap1015);
-          # rebuild it if the env is reinstalled, otherwise 16-thread matching serialises
-          # and this is ~2x slower than scipy. Invalid permutations fall back to scipy.
-          default_solver: lap1015_late
+          default_solver: scipy
           adaptive_solver: false
           parallel_solver: true
           n_jobs: 16
-          # Opt-in GPU solver, worth it only when training is host-bound (e.g. one B200):
-          # needs the torch-linear-assignment build from setup/build_torch_linear_assignment.sh.
-          # device_solver: jv
 
       tasks:
         class_path: torch.nn.ModuleList

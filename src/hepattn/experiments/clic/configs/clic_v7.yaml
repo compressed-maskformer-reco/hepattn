@@ -1,4 +1,4 @@
-name: clic_v6
+name: clic_v7
 seed_everything: 42
 
 data:
@@ -31,7 +31,7 @@ data:
   num_test: -1
   num_val: 5000
 
-  batch_size: 2048
+  batch_size: 512
   incidence_cutval: 0.01
 
   scale_dict_path: &scale_dict_path configs/clic_var_transform.yaml
@@ -39,7 +39,7 @@ data:
 trainer:
   max_epochs: 200
   accelerator: gpu
-  devices: 4
+  devices: 2
   precision: bf16-mixed
   gradient_clip_val: 0.1
   log_every_n_steps: 50
@@ -89,7 +89,7 @@ model:
   model:
     class_path: hepattn.models.MaskFormer
     init_args:
-      dim: &dim 256
+      dim: &dim 64
 
       input_nets:
         class_path: torch.nn.ModuleList
@@ -123,7 +123,7 @@ model:
           value_residual: true
           num_register_tokens: 8
           attn_kwargs:
-            num_heads: 16
+            num_heads: 8
 
       decoder:
         num_decoder_layers: 4
@@ -134,21 +134,15 @@ model:
           dim: *dim
           hybrid_norm: true
           attn_kwargs:
-            num_heads: 16
+            num_heads: 8
 
       matcher:
         class_path: hepattn.models.matcher.Matcher
         init_args:
-          # lap1015_late needs the GIL-releasing build of the extension (src/lap1015);
-          # rebuild it if the env is reinstalled, otherwise 16-thread matching serialises
-          # and this is ~2x slower than scipy. Invalid permutations fall back to scipy.
-          default_solver: lap1015_late
+          default_solver: scipy
           adaptive_solver: false
           parallel_solver: true
           n_jobs: 16
-          # Opt-in GPU solver, worth it only when training is host-bound (e.g. one B200):
-          # needs the torch-linear-assignment build from setup/build_torch_linear_assignment.sh.
-          # device_solver: jv
 
       tasks:
         class_path: torch.nn.ModuleList
@@ -171,7 +165,7 @@ model:
                     input_size: *dim
                     activation: torch.nn.SiLU
                     output_size: 6
-                    hidden_layers: [256, 128, 32]
+                    hidden_layers: [64, 128, 32]
                 null_weight: 0.5
                 class_weights: [1.0, 3.0, 8.0, 1.5, 1.0]
                 mask_queries: false
@@ -239,8 +233,8 @@ model:
                 net:
                   class_path: hepattn.models.Dense
                   init_args:
-                    input_size: 518
+                    input_size: 134
                     activation: torch.nn.SiLU
                     output_size: 5
-                    hidden_layers: [512, 256, 128, 64, 32]
+                    hidden_layers: [128, 128, 128, 64, 32]
                 has_intermediate_loss: false

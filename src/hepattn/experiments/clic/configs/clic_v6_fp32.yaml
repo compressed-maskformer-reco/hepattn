@@ -1,5 +1,18 @@
-name: clic_v6
+name: clic_v6_fp32
 seed_everything: 42
+
+# Full-fp32 variant of base.yaml (v6, 10.1M params) for the precision study
+# (studies/glow_jet_iqr/03_precision). ONLY precision-related knobs differ from
+# base.yaml so precision is isolated as the variable:
+#   - trainer.precision: bf16-mixed -> 32-true
+#   - encoder attn_type: flash-varlen -> torch   (flash-varlen has no true-fp32 path;
+#       torch attention runs genuine fp32, and sidesteps the L4 bf16-cast fix in attention.py)
+#   - matmul_precision: high -> highest          (no TF32; genuine full fp32 matmuls)
+#   - batch_size: 256/GPU (bf16 L4) -> 128/GPU   (fp32 ~2x activation memory; global 128x6=768,
+#       matching the plotted 3xL4 run's global batch for comparability)
+# Everything else (architecture, optimizer, schedule, data, 200 epochs) is identical to base.yaml.
+
+matmul_precision: highest
 
 data:
   inputs:
@@ -31,7 +44,7 @@ data:
   num_test: -1
   num_val: 5000
 
-  batch_size: 2048
+  batch_size: 128
   incidence_cutval: 0.01
 
   scale_dict_path: &scale_dict_path configs/clic_var_transform.yaml
@@ -39,8 +52,8 @@ data:
 trainer:
   max_epochs: 200
   accelerator: gpu
-  devices: 4
-  precision: bf16-mixed
+  devices: 3
+  precision: 32-true
   gradient_clip_val: 0.1
   log_every_n_steps: 50
   default_root_dir: logs
@@ -61,12 +74,6 @@ trainer:
         save_last: true
         # every_n_train_steps: 1000
     - class_path: hepattn.experiments.clic.PflowPredictionWriter
-      # init_args:
-      #   write_inputs: true
-      #   write_outputs: true
-      #   write_preds: true
-      #   write_targets: true
-      #   write_losses: false
     - class_path: lightning.pytorch.callbacks.ModelSummary
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
     - class_path: lightning.pytorch.callbacks.TQDMProgressBar
@@ -118,7 +125,7 @@ model:
         init_args:
           num_layers: 6
           dim: *dim
-          attn_type: flash-varlen
+          attn_type: torch
           hybrid_norm: true
           value_residual: true
           num_register_tokens: 8
@@ -139,16 +146,10 @@ model:
       matcher:
         class_path: hepattn.models.matcher.Matcher
         init_args:
-          # lap1015_late needs the GIL-releasing build of the extension (src/lap1015);
-          # rebuild it if the env is reinstalled, otherwise 16-thread matching serialises
-          # and this is ~2x slower than scipy. Invalid permutations fall back to scipy.
-          default_solver: lap1015_late
+          default_solver: scipy
           adaptive_solver: false
           parallel_solver: true
           n_jobs: 16
-          # Opt-in GPU solver, worth it only when training is host-bound (e.g. one B200):
-          # needs the torch-linear-assignment build from setup/build_torch_linear_assignment.sh.
-          # device_solver: jv
 
       tasks:
         class_path: torch.nn.ModuleList
