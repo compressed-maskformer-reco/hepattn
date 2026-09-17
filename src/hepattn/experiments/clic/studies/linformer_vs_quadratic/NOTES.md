@@ -343,7 +343,7 @@ Validation loss at matched epoch, same OneCycle schedule, from checkpoint filena
 |---|---|---|---|
 | 160 | 4.00455 | 4.56788 | 0.563 |
 | 161 | 4.01215 | 4.57743 | 0.565 |
-| 199 | (pending) | 4.51461 | -- |
+| 199 | **3.98111** (resumed run `clic_v6_quadratic_20260915-T230910`, finished 2026-09-16) | 4.51461 | 0.534 |
 
 The quadratic arm at epoch 161 is already 0.50 below the Linformer arm's *final* loss.
 Epoch-to-epoch jitter on either arm is ~0.01, so this is not noise. The arms differ in

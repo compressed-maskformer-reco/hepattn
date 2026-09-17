@@ -16,10 +16,10 @@ source "${REPO_DIR}/polaris/env.sh"
 
 if [ "${SMOKE:-0}" = "1" ]; then
   QUEUE="${QUEUE_DEBUG:-debug}"; WALL="00:30:00"; NAME="clic-${ARM}-smoke"
-  EXTRA="-v REPO_DIR=${REPO_DIR},CFG=${CFG},SMOKE=1"
+  EXTRA="-v REPO_DIR=${REPO_DIR},CFG=${CFG},SMOKE=1${LOG_ROOT:+,LOG_ROOT=${LOG_ROOT}}"
 else
   QUEUE="${QUEUE_PROD:-preemptable}"; WALL="${WALLTIME:-48:00:00}"; NAME="clic-${ARM}"
-  EXTRA="-v REPO_DIR=${REPO_DIR},CFG=${CFG}${RESUME_CKPT:+,RESUME_CKPT=${RESUME_CKPT}}${EPOCHS:+,EPOCHS=${EPOCHS}}"
+  EXTRA="-v REPO_DIR=${REPO_DIR},CFG=${CFG}${RESUME_CKPT:+,RESUME_CKPT=${RESUME_CKPT}}${EPOCHS:+,EPOCHS=${EPOCHS}}${LOG_ROOT:+,LOG_ROOT=${LOG_ROOT}}"
 fi
 
 mkdir -p "${REPO_DIR}/polaris/logs"

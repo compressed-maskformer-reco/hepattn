@@ -84,6 +84,16 @@ if [ -n "${EPOCHS:-}" ]; then
   echo "==> epochs overridden to ${EPOCHS}"
 fi
 
+# LOG_ROOT moves the run directory (config.yaml, ckpts/, csv_metrics/) off $HOME. A 200-epoch
+# run writes ~200 x 120 MB of checkpoints; the 45 GB home quota killed the quadratic arm at
+# epoch 162 that way. Point it at project space, e.g. LOG_ROOT=/eagle/<project>/<you>/logs.
+LOG_ARG=""
+if [ -n "${LOG_ROOT:-}" ]; then
+  mkdir -p "${LOG_ROOT}"
+  LOG_ARG="--trainer.default_root_dir ${LOG_ROOT}"
+  echo "==> run directory under ${LOG_ROOT}"
+fi
+
 RESUME_ARG=""
 if [ -n "${RESUME_CKPT:-}" ]; then
   RESUME_ARG="--ckpt_path ${RESUME_CKPT}"
@@ -102,6 +112,6 @@ python main.py fit \
   --data.test_path  "${DATA_ROOT}/val_clic_fix.root" \
   --trainer.devices 4 \
   --trainer.num_nodes 1 \
-  ${SMOKE_ARGS} ${EPOCH_ARG} ${RESUME_ARG}
+  ${SMOKE_ARGS} ${EPOCH_ARG} ${RESUME_ARG} ${LOG_ARG}
 
 echo "==> finished $(date -Is)"
