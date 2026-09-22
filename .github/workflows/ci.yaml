@@ -12,25 +12,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Lint rules live once in .pre-commit-config.yaml; this job only runs them.
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-      - name: Ensure Clean Jupyter Notebooks
-        uses: ResearchSoftwareActions/EnsureCleanNotebooksAction@1.1
-
-      - name: Setup Ruff
-        uses: astral-sh/ruff-action@v3
-        with:
-          version: "0.13.0"
-          args: "--version"
-
-      - name: Run ruff check
-        run: ruff check
-
-      - name: Run ruff format
-        run: ruff format --check
+      - uses: astral-sh/setup-uv@v5
+      - name: pre-commit hooks (prek)
+        run: uvx prek@0.4.5 run --all-files --show-diff-on-failure
+        env:
+          SKIP: no-commit-to-branch
 
   type_check:
     runs-on: ubuntu-latest
