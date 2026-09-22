@@ -72,9 +72,7 @@ def load_pred_mpflow(pred_path, threshold=0.5, num_events=None, return_proxy=Fal
     for var in tqdm(vars_to_load, desc="Loading mpflow predictions...", total=len(vars_to_load)):
         new_var = var.replace("mpflow_", "")
         arr = _read(var)
-        mpflow_dict[new_var] = np.array(
-            [x[m] for x, m in zip(arr, mask, strict=False)], dtype=object
-        )
+        mpflow_dict[new_var] = np.array([x[m] for x, m in zip(arr, mask, strict=False)], dtype=object)
     mpflow_dict["event_number"] = ak.to_numpy(tree["event_number"].array(entry_stop=num_events, library="ak")).astype(int)
 
     # compute mass and energy
