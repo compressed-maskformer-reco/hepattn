@@ -164,3 +164,40 @@ def test_encoder_change_backends(attn_type, attn_type_new):
 
     # We allow this tolerance because of fp16 precision issues
     torch.testing.assert_close(out, out_new, atol=5e-3, rtol=5e-3)
+
+
+def test_encoder_sorting_keeps_padding_out_of_the_sequence():
+    """Sorting the tokens must not let padded slots displace real ones.
+
+    ``x_sort_value`` is taken from an input field (phi, for CLIC), and a padded slot carries
+    whatever that field pads to -- zero, which falls in the middle of a phi ordering. The
+    padded slots therefore have to be pushed to the end, and the mask has to follow the same
+    permutation, or the encoder attends to padding and masks out real tokens.
+    """
+    torch.manual_seed(42)
+    batch_size, seq_len, dim, num_valid = 2, 16, 32, 10
+
+    model = Encoder(num_layers=2, dim=dim, attn_kwargs={"attn_type": "torch"})
+    model.eval()
+
+    x = torch.rand(batch_size, seq_len, dim)
+    kv_mask = torch.zeros(batch_size, seq_len, dtype=torch.bool)
+    kv_mask[:, :num_valid] = True
+
+    # A phi-like sort value in [-pi, pi] for the real tokens, zero for the padded ones
+    sort_value = torch.zeros(batch_size, seq_len)
+    sort_value[:, :num_valid] = torch.empty(batch_size, num_valid).uniform_(-torch.pi, torch.pi)
+
+    with torch.no_grad():
+        sorted_out = model(x, x_sort_value=sort_value, kv_mask=kv_mask)
+        unsorted_out = model(x, kv_mask=kv_mask)
+
+        # Padded slots must not influence the real ones, whatever garbage they hold
+        x_garbage = x.clone()
+        x_garbage[:, num_valid:] = 1e3
+        garbage_out = model(x_garbage, x_sort_value=sort_value, kv_mask=kv_mask)
+
+    # The encoder undoes the sort, so the real tokens come back in their original positions,
+    # and attention is permutation equivariant: sorting must not change their values
+    torch.testing.assert_close(sorted_out[kv_mask], unsorted_out[kv_mask], atol=1e-5, rtol=1e-4)
+    torch.testing.assert_close(sorted_out[kv_mask], garbage_out[kv_mask], atol=1e-5, rtol=1e-4)

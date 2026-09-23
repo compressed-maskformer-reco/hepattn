@@ -231,8 +231,17 @@ class Encoder(nn.Module):
         # We don't need to use the stable sort assuming that the sort values are unique
         x_sort_idx = None
         if x_sort_value is not None:
+            kv_mask = kwargs.get("kv_mask")
+            if kv_mask is not None:
+                # A padded slot has no meaningful sort value, so it must not be allowed to sort
+                # in amongst the real tokens: zero-padded inputs would land wherever zero falls
+                # in the ordering. Send them to the end, keeping the real tokens contiguous.
+                x_sort_value = torch.where(kv_mask, x_sort_value, float("inf"))
             x_sort_idx = torch.argsort(x_sort_value, axis=-1)
             x = torch.gather(x, -2, x_sort_idx.unsqueeze(-1).expand_as(x))
+            if kv_mask is not None:
+                # The mask indexes the sequence, so it has to follow the same permutation
+                kwargs["kv_mask"] = torch.gather(kv_mask, -1, x_sort_idx)
 
         # Add register tokens at the beginning of the sequence
         if self.register_tokens is not None:

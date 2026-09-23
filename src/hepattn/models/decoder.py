@@ -177,6 +177,8 @@ class MaskFormerDecoderLayer(nn.Module):
         depth: int = 0,
         dense_kwargs: dict | None = None,
         attn_kwargs: dict | None = None,
+        sa_attn_kwargs: dict | None = None,
+        kv_ca_attn_kwargs: dict | None = None,
         mask_attention: bool = True,
         bidirectional_ca: bool = True,
         hybrid_norm: bool = False,
@@ -196,13 +198,24 @@ class MaskFormerDecoderLayer(nn.Module):
         attn_kwargs = attn_kwargs or {}
         dense_kwargs = dense_kwargs or {}
 
+        # The query self-attention can be configured apart from the two cross-attentions: it is the
+        # only attention in this layer that carries no mask, so it is the only one a backend that
+        # cannot mask (linformer) may be used for while mask_attention is on. Keys given here
+        # override attn_kwargs.
+        sa_attn_kwargs = {**attn_kwargs, **(sa_attn_kwargs or {})}
+        # The reverse cross-attention is configured apart from the forward one for a different
+        # reason: the two run in opposite directions, so a setting sized to the key/value sequence
+        # (linformer_seq_len, which is the object queries here and the constituents in q_ca) cannot
+        # be the same number at both. Same override rule.
+        kv_ca_attn_kwargs = {**attn_kwargs, **(kv_ca_attn_kwargs or {})}
+
         residual = partial(Residual, dim=dim, norm=norm)
         self.q_ca = residual(Attention(dim, qkv_norm=qkv_norm, **attn_kwargs), norm=attn_norm)
-        self.q_sa = residual(Attention(dim, qkv_norm=qkv_norm, **attn_kwargs), norm=attn_norm)
+        self.q_sa = residual(Attention(dim, qkv_norm=qkv_norm, **sa_attn_kwargs), norm=attn_norm)
         self.q_dense = residual(Dense(dim, **dense_kwargs), norm=norm, post_norm=dense_post_norm)
 
         if self.bidirectional_ca:
-            self.kv_ca = residual(Attention(dim, qkv_norm=qkv_norm, **attn_kwargs), norm=attn_norm)
+            self.kv_ca = residual(Attention(dim, qkv_norm=qkv_norm, **kv_ca_attn_kwargs), norm=attn_norm)
             self.kv_dense = residual(Dense(dim, **dense_kwargs), norm=norm, post_norm=dense_post_norm)
 
     def forward(self, q: Tensor, kv: Tensor, attn_mask: Tensor | None = None, q_mask: Tensor | None = None, kv_mask: Tensor | None = None) -> Tensor:

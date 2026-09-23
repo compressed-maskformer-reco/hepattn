@@ -1,0 +1,11 @@
+# HiPerGator (HPG) overlay: pass AFTER the model config so its data paths win, e.g.
+#   python main.py fit --config configs/base.yaml --config configs/hpg.yaml
+# The HPG submit scripts append it for you.
+#
+# Only the data location lives here, so base.yaml stays the authors' recipe untouched.
+# Same dataset and filenames as the authors' /share/gpu1/syw24/dmitrii_clic (see README.md).
+# test_path is the common-infer file used for evaluation (test is not used during `fit`).
+data:
+  train_path: /blue/avery/m.mazza/projects/fastml/hepattn/data/clic/train_clic_fix.root
+  valid_path: /blue/avery/m.mazza/projects/fastml/hepattn/data/clic/val_clic_fix.root
+  test_path: /blue/avery/m.mazza/projects/fastml/hepattn/data/clic/test_clic_common_infer.root

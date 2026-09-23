@@ -1,12 +1,54 @@
+# Glow: Particle Flow with CLIC
+
+This work is described in our preprint: [GLOW: A Unified Transformer for Diverse Reconstruction Tasks in Particle Physics](https://arxiv.org/abs/2508.20092)
+
+This branch (`clic-paper-main`) continues from the code of that paper (tag `clic-paper`).
+
 ## Running the model
 
+Everything for CLIC runs in the `clic` pixi environment. It contains the whole GPU
+training stack (torch with CUDA, flash-attention, the compiled `lap1015` solver) plus
+the analysis packages (`fastjet`, `energyflow`, `vector`, `pathos`), so training,
+evaluation and the performance notebooks all use this one environment. There is no
+need to install the `default` environment described in the top level
+[README.md](../../../../README.md); that one serves the other experiments and lacks the
+analysis packages.
+
+Clone the repository, pull the pixi container (see the top level README for the image),
+install and activate the `clic` environment:
+
 ```shell
+git clone git@github.com:mmfsz/hepattn.git -b clic-paper-main
 cd hepattn
-apptainer shell --nv --bind /share/ pixi.sif
-pixi shell
-cd hepattn/src/hepattn/experiments/clic/
-python main.py fit --config configs/base.yaml
-sbatch hepattn/src/hepattn/experiments/clic/submit_training_sam.sh
+apptainer pull pixi.sif docker://ghcr.io/prefix-dev/pixi:0.54.1-jammy-cuda-12.8.1
+apptainer shell --nv --bind /blue/,/cmsuf/ pixi.sif
+pixi install -e clic --locked
+pixi shell -e clic
+cd src/hepattn/experiments/clic/
+```
+
+The install takes a while the first time (the environment is about 15 GB). The
+container is only needed on systems whose `libc` is older than 2.28; on HiPerGator it is
+the supported way to run, and the submit scripts use it.
+
+Check the install once (both must print `True`; the first needs a rebuild with
+`pixi reinstall hepattn` if it does not, see the top level README):
+
+```shell
+python -c "import lap1015; print(lap1015.releases_gil)"
+python -c "import flash_attn, torch; print(torch.cuda.is_available() or 'no GPU here, fine on a login node')"
+```
+
+The GPU matching solver (`configs/matcher_jv.yaml`) needs one more build, described in
+the top level README under "solving the matching on the GPU":
+`pixi run -e clic bash setup/build_torch_linear_assignment.sh`.
+
+On UF HiPerGator see [README_HPG.md](./README_HPG.md) for the submit scripts and the data
+location; the data paths live in `configs/hpg.yaml`, which the scripts layer over any
+model config. To train interactively:
+
+```shell
+python main.py fit --config configs/base.yaml --config configs/hpg.yaml --trainer.devices=1
 ```
 
 ## Evaluation

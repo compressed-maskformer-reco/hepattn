@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 
 import awkward as ak
@@ -10,6 +11,10 @@ from numpy.lib.recfunctions import structured_to_unstructured as s2u
 from numpy.lib.recfunctions import unstructured_to_structured as u2s
 
 from hepattn.utils.array_utils import join_structured_arrays, maybe_pad
+
+# atlas-ftag-tools renamed H5Writer's `jets_name` argument to `global_objects_name` in 0.3.0.
+# hepattn does not pin the package, so support whichever name the installed version takes.
+H5_OBJECTS_KWARG = "global_objects_name" if "global_objects_name" in inspect.signature(H5Writer).parameters else "jets_name"
 
 
 def load_convert_h5(filepath):
@@ -49,7 +54,10 @@ def load_convert_h5(filepath):
         pflow_indicator = pflow_class < 1 if "Bin" in filepath else (pflow_class < 5) & (np.abs(pflow_ptetaphi[..., 1]) < 4)
 
         neutral_mask = (pflow_class < 5) & (pflow_class > 2)
-        pflow_ptetaphi[neutral_mask][..., 0] = pflow_data[neutral_mask][..., 0] / np.cosh(pflow_ptetaphi[neutral_mask][..., 1])
+        # Single advanced-index assignment writes in place; the previous chained form
+        # `arr[mask][..., 0] = ...` assigned to a temporary copy and was a silent no-op,
+        # leaving neutral pt as the direct regression instead of the calorimeter E/cosh(eta).
+        pflow_ptetaphi[neutral_mask, 0] = pflow_data[neutral_mask, 0] / np.cosh(pflow_ptetaphi[neutral_mask, 1])
 
         event_number = f["events"]["event_number"][:]
 
@@ -115,12 +123,12 @@ class PflowPredictionWriter(Callback):
             dtypes = {k: v.dtype for k, v in to_write.items()}
             shapes = {k: (self.num_events, *v.shape[1:]) for k, v in to_write.items()}
             self.writer = H5Writer(
-                jets_name="events",
                 dst=self.output_path,
                 dtypes=dtypes,
                 shapes=shapes,
                 shuffle=False,
                 precision="full",
+                **{H5_OBJECTS_KWARG: "events"},
             )
         self.writer.write(to_write)
 

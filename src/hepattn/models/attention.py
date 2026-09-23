@@ -6,19 +6,23 @@ from torch import BoolTensor, Size, Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask, _score_mod_signature, flex_attention
 from torch.nn.functional import scaled_dot_product_attention
 
+from hepattn.models.linformer import LinformerAttention
 from hepattn.models.norm import LayerNorm
 
+# "linformer" is a module with its own projections, created per layer in set_backend
 ATTN_TYPES = {
     "torch": scaled_dot_product_attention,
     "flex": flex_attention,
     "flash": flash_attn_func,
     "flash-varlen": flash_attn_varlen_func,
+    "linformer": None,
 }
 
 # Which attentiom types support varlen / kv padding
 VARLEN_ATTN_TYPES = [
     "torch",
     "flash-varlen",
+    "linformer",
 ]
 
 # Which attention types support attention masking
@@ -148,7 +152,25 @@ class Attention(nn.Module):
         qkv_norm: bool = False,
         value_residual: bool = False,
         is_first_layer: bool = False,
+        linformer_proj_dim: int = 256,
+        linformer_seq_len: int = 256,
     ) -> None:
+        """Multi-head attention with a choice of backend.
+
+        The ``linformer`` backend (see :class:`hepattn.models.linformer.LinformerAttention`) owns its
+        own input/output projections, so this module creates no ``in_proj``/``out_proj`` for it. The
+        backend holds its own ``bias``, ``qkv_norm`` and ``value_residual``, which are handed to it
+        here and applied to the real tokens, before the sequence projection, so that they mean what
+        they mean for every other backend.
+
+        Parameters
+        ----------
+        linformer_proj_dim : int
+            Linformer only: projected key/value sequence length (the low rank).
+        linformer_seq_len : int
+            Linformer only: maximum key/value sequence length.
+
+        """
         super().__init__()
         assert dim % num_heads == 0, "num_heads must divide dim."
         assert attn_type in ATTN_TYPES, f"Invalid attention type: {attn_type}"
@@ -163,20 +185,23 @@ class Attention(nn.Module):
         self.qkv_norm = qkv_norm
         self.value_residual = value_residual
         self.is_first_layer = is_first_layer
+        self.linformer_proj_dim = linformer_proj_dim
+        self.linformer_seq_len = linformer_seq_len
 
-        self.in_proj_weight = nn.Parameter(torch.empty(3 * dim, dim))
-        self.in_proj_bias = nn.Parameter(torch.empty(3 * dim)) if bias else None
-        self.out_proj = nn.Linear(dim, dim, bias=bias)
+        if attn_type != "linformer":
+            self.in_proj_weight = nn.Parameter(torch.empty(3 * dim, dim))
+            self.in_proj_bias = nn.Parameter(torch.empty(3 * dim)) if bias else None
+            self.out_proj = nn.Linear(dim, dim, bias=bias)
 
-        if self.value_residual and not self.is_first_layer:
-            self.value_residual_mix = nn.Sequential(nn.Linear(dim, num_heads), nn.Sigmoid())
+            if self.value_residual and not self.is_first_layer:
+                self.value_residual_mix = nn.Sequential(nn.Linear(dim, num_heads), nn.Sigmoid())
 
-        if self.qkv_norm:
-            self.q_norm = LayerNorm(dim)
-            self.k_norm = LayerNorm(dim)
-            self.v_norm = LayerNorm(dim)
+            if self.qkv_norm:
+                self.q_norm = LayerNorm(dim)
+                self.k_norm = LayerNorm(dim)
+                self.v_norm = LayerNorm(dim)
 
-        self.reset_parameters()
+            self.reset_parameters()
         self.set_backend(attn_type, torch_compile=torch_compile, window_size=window_size)
 
     def reset_parameters(self):
@@ -189,10 +214,27 @@ class Attention(nn.Module):
     def set_backend(self, attn_type: str, torch_compile: bool = False, window_size: int | None = None) -> str:
         # Allow to change the attention backend after initialization, when evaluating the model
 
-        self.attn_type = attn_type
         if attn_type not in ATTN_TYPES:
             raise ValueError(f"Invalid attention type: {attn_type}")
-        self.attn = ATTN_TYPES[attn_type]
+        if (attn_type == "linformer") != (self.attn_type == "linformer"):
+            raise ValueError("Cannot switch between the linformer backend and the others: their parameters differ")
+        self.attn_type = attn_type
+        if attn_type == "linformer":
+            # Created once; a later set_backend call (e.g. at evaluation) must keep the trained weights
+            if not isinstance(getattr(self, "attn", None), LinformerAttention):
+                self.attn = LinformerAttention(
+                    self.dim,
+                    seq_len=self.linformer_seq_len,
+                    k=self.linformer_proj_dim,
+                    heads=self.num_heads,
+                    dim_head=self.head_dim,
+                    bias=self.bias,
+                    qkv_norm=self.qkv_norm,
+                    value_residual=self.value_residual,
+                    is_first_layer=self.is_first_layer,
+                )
+        else:
+            self.attn = ATTN_TYPES[attn_type]
 
         if attn_type in FLASH_ATTN_TYPES:
             # TODO: Will need to change when supporting window with flex
@@ -261,6 +303,9 @@ class Attention(nn.Module):
         # Assume unpadding has been handled by the caller, so inputs are (1, total_valid_tokens, dim)
         # Flatten for flash attention which expects (total_valid_tokens, num_heads, head_dim)
         q_flat, k_flat, v_flat = q.squeeze(0), k.squeeze(0), v.squeeze(0)
+        # torch.compile can break AMP autocast, leaving fp32 tensors that flash_attn rejects
+        if q_flat.dtype == torch.float32:
+            q_flat, k_flat, v_flat = q_flat.to(torch.bfloat16), k_flat.to(torch.bfloat16), v_flat.to(torch.bfloat16)
         out = self.attn(q_flat, k_flat, v_flat, cu_seqlens, cu_seqlens, max_seqlen, max_seqlen, window_size=self.window_size)
         return out.view(q.shape[0], -1, self.dim)
 
@@ -330,6 +375,12 @@ class Attention(nn.Module):
         if attn_bias is not None:
             msg = f"Only the backends {ATTN_BIAS_ATTN_TYPES} support attention masking"
             assert self.attn_type in ATTN_BIAS_ATTN_TYPES, msg
+
+        # Linformer does its own projections and returns the output directly
+        if self.attn_type == "linformer":
+            # q_mask reaches the other backends through merge_masks, which this path does not use;
+            # the backend zeroes the padded output rows instead, which comes to the same thing.
+            return self.attn(q, kv, q_mask=q_mask, kv_mask=kv_mask, initial_values=initial_values)
 
         # Prepare queries, keys, and values
         q, k, v = self._prepare_qkv(q, kv, initial_values)

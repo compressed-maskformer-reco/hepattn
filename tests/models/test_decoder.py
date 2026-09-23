@@ -226,3 +226,68 @@ class TestMaskFormerDecoderLayer:
 
         # We'd need to check that the mask was modified correctly
         # In real testing, you might want to verify this, but we'll skip for simplicity
+
+
+def test_decoder_layer_configures_self_attention_separately():
+    """The query self-attention carries no mask, so it can use a backend the cross-attentions cannot.
+
+    This is what lets Linformer sit on q_sa while q_ca and kv_ca keep their masked attention.
+    """
+    layer = MaskFormerDecoderLayer(
+        dim=16,
+        depth=1,
+        attn_kwargs={"num_heads": 2, "attn_type": "torch"},
+        sa_attn_kwargs={"attn_type": "linformer", "linformer_seq_len": 8, "linformer_proj_dim": 4},
+        mask_attention=True,
+    )
+
+    assert layer.q_ca.fn.attn_type == "torch"
+    assert layer.kv_ca.fn.attn_type == "torch"
+    assert layer.q_sa.fn.attn_type == "linformer"
+
+    # keys not overridden still come from attn_kwargs
+    assert layer.q_sa.fn.num_heads == 2
+
+    q = torch.randn(2, 8, 16)
+    kv = torch.randn(2, 10, 16)
+    attn_mask = torch.ones(2, 8, 10, dtype=torch.bool)
+    q_out, kv_out = layer(q, kv, attn_mask=attn_mask)
+    assert q_out.shape == q.shape
+    assert kv_out.shape == kv.shape
+
+
+def test_decoder_layer_reverse_cross_attention_configured_separately():
+    """The two cross-attentions run in opposite directions, so a key/value-sized setting differs.
+
+    q_ca reads the constituents and kv_ca reads the object queries, so `linformer_seq_len` is a
+    different number at each. This is what lets Linformer sit on every attention in the layer once
+    masked attention is off.
+    """
+    layer = MaskFormerDecoderLayer(
+        dim=16,
+        depth=1,
+        attn_kwargs={"num_heads": 2, "attn_type": "linformer", "linformer_seq_len": 10, "linformer_proj_dim": 4},
+        kv_ca_attn_kwargs={"linformer_seq_len": 8},
+        mask_attention=False,
+    )
+
+    assert layer.q_ca.fn.linformer_seq_len == 10
+    assert layer.kv_ca.fn.linformer_seq_len == 8
+    # keys not overridden still come from attn_kwargs
+    assert layer.kv_ca.fn.num_heads == 2
+    assert layer.kv_ca.fn.linformer_proj_dim == 4
+
+    q = torch.randn(2, 8, 16)
+    kv = torch.randn(2, 10, 16)
+    kv_mask = torch.ones(2, 10, dtype=torch.bool)
+    kv_mask[:, -2:] = False
+    q_out, kv_out = layer(q, kv, kv_mask=kv_mask)
+    assert q_out.shape == q.shape
+    assert kv_out.shape == kv.shape
+    assert torch.isfinite(q_out).all()
+    assert torch.isfinite(kv_out).all()
+
+
+def test_decoder_layer_self_attention_defaults_to_attn_kwargs():
+    layer = MaskFormerDecoderLayer(dim=16, attn_kwargs={"num_heads": 2, "attn_type": "torch"})
+    assert layer.q_sa.fn.attn_type == layer.q_ca.fn.attn_type == "torch"

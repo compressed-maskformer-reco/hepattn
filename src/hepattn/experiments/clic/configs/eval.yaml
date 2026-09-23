@@ -1,0 +1,27 @@
+# Evaluation overlay: pass AFTER the run's config, e.g.
+#   python main.py test --config logs/<run>/config.yaml --config configs/eval.yaml --ckpt_path <ckpt>
+# Applies the README's evaluation rules: fp32, torch attention, inference-mode data, no Compile.
+trainer:
+  precision: 32-true
+  callbacks:
+    - class_path: hepattn.callbacks.InferenceTimer
+    - class_path: hepattn.experiments.clic.PflowPredictionWriter
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 50
+model:
+  model:
+    init_args:
+      encoder:
+        init_args:
+          attn_type: torch
+      matcher:
+        init_args:
+          # Matching never runs at test time, so evaluation must not depend on the
+          # out-of-environment GPU solver build: a run trained with `device_solver: jv`
+          # is otherwise unevaluable on a node whose architecture it was not built for.
+          device_solver: null
+data:
+  is_inference: true
+  num_workers: 4
+matmul_precision: highest

@@ -1,0 +1,10 @@
+# Solve the Hungarian matching on the GPU with the Jonker-Volgenant device solver.
+# Layer AFTER the model config:  --config <model>.yaml --config configs/matcher_jv.yaml
+# Needs the out-of-environment torch-linear-assignment build on PYTHONPATH (README_HPG.md);
+# the HPG submit scripts export it when vendor/torch-linear-assignment exists.
+model:
+  model:
+    init_args:
+      matcher:
+        init_args:
+          device_solver: jv

@@ -213,14 +213,26 @@ class MaskFormer(nn.Module):
 
             costs[layer_name] = layer_costs
 
+        # Solve every layer's matching in ONE matcher call. The layers are stacked along the batch
+        # axis, [num_layers * batch, pred, true], so the solver sees ~5x more independent problems
+        # at once. That is what makes a device solver pay off: its kernel runs one thread per
+        # problem, so a per-layer call of one batch leaves most of the GPU idle and costs nearly as
+        # much as the stacked call; on the host it saves four thread-pool round trips per step.
+        layer_names = [name for name, cost in costs.items() if cost is not None]
+        target_valid = targets[f"{self.target_object}_valid"]
+        pred_idxs_by_layer = {}
+        if layer_names:
+            num_layers = len(layer_names)
+            stacked_costs = torch.stack([costs[name] for name in layer_names], dim=0)
+            _, batch_size, num_pred, num_target = stacked_costs.shape
+            stacked_costs = stacked_costs.reshape(num_layers * batch_size, num_pred, num_target)
+            stacked_target_valid = target_valid.unsqueeze(0).expand(num_layers, -1, -1).reshape(num_layers * batch_size, num_target)
+            stacked_pred_idxs = self.matcher(stacked_costs, stacked_target_valid)
+            stacked_pred_idxs = stacked_pred_idxs.view(num_layers, batch_size, num_pred)
+            pred_idxs_by_layer = {name: stacked_pred_idxs[i] for i, name in enumerate(layer_names)}
+
         # Permute the outputs for each output in each layer
-        for layer_name, cost in costs.items():
-            if cost is None:
-                continue
-
-            # Get the indicies that can permute the predictions to yield their optimal matching
-            pred_idxs = self.matcher(cost, targets[f"{self.target_object}_valid"])
-
+        for layer_name, pred_idxs in pred_idxs_by_layer.items():
             for task in self.tasks:
                 # Tasks without a object dimension do not need permutation (constituent-level or sample-level)
                 if not task.permute_loss:

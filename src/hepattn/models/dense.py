@@ -3,6 +3,25 @@ from torch import Tensor, nn
 from hepattn.models.activation import SwiGLU
 
 
+def _activation_by_name(name: str) -> nn.Module:
+    """Build an activation from its name, e.g. "SwiGLU", "SiLU" or "torch.nn.SiLU".
+
+    Configs name activations as strings inside `dense_kwargs`, which jsonargparse
+    leaves untouched because the dict is untyped; without this the string would
+    reach `nn.Sequential` and fail there instead of here.
+
+    Raises:
+        ValueError: If the name is neither "SwiGLU" nor an attribute of `torch.nn`.
+    """
+    short = name.rsplit(".", 1)[-1]
+    if short == "SwiGLU":
+        return SwiGLU()
+    cls = getattr(nn, short, None)
+    if cls is None:
+        raise ValueError(f"Unknown activation {name!r}: not SwiGLU and not an attribute of torch.nn.")
+    return cls()
+
+
 class Dense(nn.Module):
     def __init__(
         self,
@@ -10,7 +29,7 @@ class Dense(nn.Module):
         output_size: int | None = None,
         hidden_layers: list[int] | None = None,
         hidden_dim_scale: int = 2,
-        activation: nn.Module | None = None,
+        activation: nn.Module | str | None = None,
         final_activation: nn.Module | None = None,
         dropout: float = 0.0,
         bias: bool = True,
@@ -30,8 +49,9 @@ class Dense(nn.Module):
             a single hidden layer with size `input_size * hidden_dim_scale`.
         hidden_dim_scale : int, optional
             Scale factor for the hidden layer size.
-        activation : nn.Module
-            Activation function for hidden layers.
+        activation : nn.Module | str
+            Activation function for hidden layers, or its name ("SwiGLU", "SiLU").
+            Defaults to SwiGLU, which gates and so doubles the inner projection.
         final_activation : nn.Module, optional
             Activation function for the output layer.
         dropout : float, optional
@@ -49,6 +69,8 @@ class Dense(nn.Module):
             hidden_layers = [input_size * hidden_dim_scale]
         if activation is None:
             activation = SwiGLU()
+        elif isinstance(activation, str):
+            activation = _activation_by_name(activation)
 
         self.input_size = input_size
         self.output_size = output_size

@@ -164,3 +164,5 @@ pytest-temp
 *.csv
 *.npy
 *.npz
+# SLURM stdout/stderr from the submit scripts
+slurm_logs/

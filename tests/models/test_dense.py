@@ -72,3 +72,26 @@ def test_compile_gpu_nested_jagged_tensor():
 
     output = model(nt)
     assert torch.all(output != 0), "Output should not be all zeros"
+
+
+@pytest.mark.parametrize("name", ["SiLU", "torch.nn.SiLU"])
+def test_dense_activation_by_name(name):
+    """A named activation is built, and only SwiGLU widens the inner projection."""
+    model = Dense(input_size=10, activation=name)
+    assert isinstance(model.net[1], nn.SiLU)
+    assert model.net[0].out_features == 20, "an ungated activation must not double the projection"
+    assert model(torch.randn(5, 10)).shape == (5, 10)
+
+
+def test_dense_swiglu_by_name_matches_the_default():
+    """Naming SwiGLU gives the same network as leaving the activation unset."""
+    named = Dense(input_size=10, activation="SwiGLU")
+    default = Dense(input_size=10)
+    assert type(named.net[1]) is type(default.net[1])
+    assert named.net[0].out_features == default.net[0].out_features == 40
+
+
+def test_dense_unknown_activation_name():
+    """An unresolvable name fails in Dense, not deep inside nn.Sequential."""
+    with pytest.raises(ValueError, match="Unknown activation"):
+        Dense(input_size=10, activation="NotAnActivation")
