@@ -6,6 +6,6 @@
 # Same dataset and filenames as the authors' /share/gpu1/syw24/dmitrii_clic (see README.md).
 # test_path is the common-infer file used for evaluation (test is not used during `fit`).
 data:
-  train_path: /blue/avery/m.mazza/projects/fastml/hepattn/data/clic/train_clic_fix.root
-  valid_path: /blue/avery/m.mazza/projects/fastml/hepattn/data/clic/val_clic_fix.root
-  test_path: /blue/avery/m.mazza/projects/fastml/hepattn/data/clic/test_clic_common_infer.root
+  train_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/train_clic_fix.root
+  valid_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/val_clic_fix.root
+  test_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/test_clic_common_infer.root

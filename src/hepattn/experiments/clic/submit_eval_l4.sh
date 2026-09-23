@@ -20,7 +20,7 @@
 # a Linformer run needs studies/linformer/configs/eval_linformer.yaml, whose comment says why.
 
 #SBATCH -p hpg-turin
-#SBATCH --account=your-account
+#SBATCH --account=avery
 #SBATCH --nodes=1
 #SBATCH --export=ALL
 #SBATCH --gres=gpu:l4:1

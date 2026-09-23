@@ -16,7 +16,7 @@
 #          submit_validate_run.sh
 
 #SBATCH -p hpg-turin
-#SBATCH --account=your-account
+#SBATCH --account=avery
 #SBATCH --nodes=1
 #SBATCH --export=ALL
 #SBATCH --gres=gpu:l4:1

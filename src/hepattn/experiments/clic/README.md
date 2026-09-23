@@ -2,7 +2,7 @@
 
 This work is described in our preprint: [GLOW: A Unified Transformer for Diverse Reconstruction Tasks in Particle Physics](https://arxiv.org/abs/2508.20092)
 
-This branch (`clic-paper-main`) continues from the code of that paper (tag `clic-paper`).
+This code continues from the code of that paper (tag `clic-paper`).
 
 ## Running the model
 
@@ -18,7 +18,7 @@ Clone the repository, pull the pixi container (see the top level README for the 
 install and activate the `clic` environment:
 
 ```shell
-git clone git@github.com:mmfsz/hepattn.git -b clic-paper-main
+git clone git@github.com:compressed-maskformer-reco/hepattn.git
 cd hepattn
 apptainer pull pixi.sif docker://ghcr.io/prefix-dev/pixi:0.54.1-jammy-cuda-12.8.1
 apptainer shell --nv --bind /blue/,/cmsuf/ pixi.sif

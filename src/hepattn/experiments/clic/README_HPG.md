@@ -16,10 +16,10 @@ details see [`README.md`](./README.md).
 - **CUDA module:** `module load cuda/12.8.1` (matches the container build; already in
   the submit scripts).
 - **Data:** the CLIC ROOT files must be readable from the compute nodes.
-  [`configs/hpg.yaml`](./configs/hpg.yaml) points at the group's copy on `/blue`:
+  [`configs/hpg.yaml`](./configs/hpg.yaml) points at the copy on `/cmsuf`, which is world-readable:
 
   ```
-  /blue/avery/m.mazza/projects/fastml/hepattn/data/clic/
+  /cmsuf/data/store/user/mmazza/hepattn_clic_data/
   ├── train_clic_fix.root          # 12 GB
   ├── val_clic_fix.root            # 309 MB
   └── test_clic_common_infer.root  # 250 MB

@@ -13,7 +13,7 @@
 
 #SBATCH --job-name=clic-train-b200
 #SBATCH -p hpg-b200
-#SBATCH --account=your-account
+#SBATCH --account=avery
 #SBATCH --nodes=1
 #SBATCH --export=ALL
 #SBATCH --gres=gpu:b200:1

@@ -6,7 +6,7 @@
 
 #SBATCH --job-name=clic-train-l4
 #SBATCH -p hpg-turin
-#SBATCH --account=your-account
+#SBATCH --account=avery
 #SBATCH --nodes=1
 #SBATCH --export=ALL
 #SBATCH --gres=gpu:l4:3

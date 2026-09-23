@@ -57,9 +57,9 @@ data:
 
   # HPG data paths (patched from the authors' /share/gpu1/... paths — same dataset, same filenames).
   # test_path uses our common-infer file (test is not used during `fit`).
-  train_path: /blue/avery/m.mazza/projects/fastml/hepattn/data/clic/train_clic_fix.root
-  valid_path: /blue/avery/m.mazza/projects/fastml/hepattn/data/clic/val_clic_fix.root
-  test_path: /blue/avery/m.mazza/projects/fastml/hepattn/data/clic/test_clic_common_infer.root
+  train_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/train_clic_fix.root
+  valid_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/val_clic_fix.root
+  test_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/test_clic_common_infer.root
 
   num_workers: 16
   num_train: -1
