@@ -92,4 +92,8 @@ APPTAINER_CMD="apptainer run --nv --bind /blue/,/cmsuf/ $REPO/pixi.sif $PIXI_CMD
 
 echo "Running: $PYTORCH_CMD"
 $APPTAINER_CMD
-echo "Done!"
+status=$?
+echo "Done! exit status $status"
+# Exit with the job's status: without this the script's last command is an echo, so SLURM
+# reports the job COMPLETED even when the run failed.
+exit $status

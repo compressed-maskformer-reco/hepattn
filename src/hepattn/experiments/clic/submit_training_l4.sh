@@ -81,5 +81,9 @@ APPTAINER_CMD="srun ./run_task.sh apptainer run --nv --bind /blue/,/cmsuf/ $REPO
 # Run the final command
 echo "Running command: $APPTAINER_CMD"
 $APPTAINER_CMD
-echo "finished: $(date -Is)"
+status=$?
+echo "finished: $(date -Is), exit status $status"
 echo "Done!"
+# Exit with the job's status: without this the script's last command is an echo, so SLURM
+# reports the job COMPLETED even when the run failed.
+exit $status
