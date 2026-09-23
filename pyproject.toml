@@ -20,6 +20,9 @@ dependencies = [
     "atlas-ftag-tools",
     "pytest>=8.3.3,<9",
     "pytest-repeat",
+    "pytest-cov>=7.0.0,<8",
+    "coverage[toml]>=7.10.6,<8",
+    "ty>=0.0.1a20,<0.0.1a21",
     "ruff==0.12.4",
     "pre-commit>=4.0.1,<5",
     "matplotlib==3.9.*",
@@ -107,6 +110,12 @@ cmd = "pytest -xsv"
 [tool.pixi.tasks.test-ci]
 cmd = "pytest -xsv -m 'not gpu and not requiresdata'"
 
+[tool.pixi.tasks.test-unit-ci]
+cmd = "pytest --ignore=tests/experiments/ -m 'not gpu and not requiresdata' --cov=src --cov-report=xml --cov-report=term-missing"
+
+[tool.pixi.tasks.test-integration-ci]
+cmd = "pytest tests/experiments/ -m 'not gpu and not requiresdata' --cov=src --cov-report=xml --cov-report=term-missing"
+
 [tool.ruff]
 src = ["src"]
 target-version = "py312"
@@ -131,4 +140,22 @@ filterwarnings = [
 markers = [
     "gpu: mark test to run on GPU",
     "requiresdata: mark test that requires data not present in the repository",
+]
+
+[tool.ty.rules]
+missing-argument = "ignore" # for now as kwarg unpacking is not supported
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/lap1015/*",
+    "*/experiments/*",
+    "*.ipynb"
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "raise ValueError",
 ]
