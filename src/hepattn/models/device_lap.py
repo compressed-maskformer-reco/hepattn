@@ -252,6 +252,9 @@ def require_jv(device: torch.device | None = None):
             "build on a login node silently produces a CPU-only extension) and "
             "TORCH_CUDA_ARCH_LIST set for the target GPU, then put the built tree on "
             "PYTHONPATH with LD_LIBRARY_PATH pointing at this environment's lib. "
+            "setup/build_torch_linear_assignment.sh does all of this: run it inside the "
+            "environment (e.g. `pixi run -e clic bash setup/build_torch_linear_assignment.sh`) "
+            "and follow what it prints. "
             f"Original error: {exc}"
         ) from exc
 
@@ -259,7 +262,8 @@ def require_jv(device: torch.device | None = None):
         raise RuntimeError(
             "torch-linear-assignment was built without CUDA support, so the 'jv' device solver "
             "would solve GPU costs on the host and quietly undo the point of the option. "
-            "Rebuild with FORCE_CUDA=1 and TORCH_CUDA_ARCH_LIST set for this GPU."
+            "Rebuild with FORCE_CUDA=1 and TORCH_CUDA_ARCH_LIST set for this GPU, which "
+            "setup/build_torch_linear_assignment.sh does."
         )
     return batch_linear_assignment
 
