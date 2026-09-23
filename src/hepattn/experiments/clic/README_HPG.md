@@ -35,7 +35,7 @@ Everything is submitted **from the experiment directory**, and the scripts `cd` 
 it on the compute node:
 
 ```shell
-cd /blue/avery/m.mazza/projects/fastml/hepattn-paper/src/hepattn/experiments/clic
+cd /path/to/hepattn/src/hepattn/experiments/clic
 mkdir -p slurm_logs        # sbatch refuses to start if the --output directory is missing
 ```
 

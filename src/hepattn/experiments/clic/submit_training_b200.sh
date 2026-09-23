@@ -13,7 +13,7 @@
 
 #SBATCH --job-name=clic-train-b200
 #SBATCH -p hpg-b200
-#SBATCH --account=avery
+#SBATCH --account=your-account
 #SBATCH --nodes=1
 #SBATCH --export=ALL
 #SBATCH --gres=gpu:b200:1
@@ -26,15 +26,20 @@
 # project_runtime.py warns about.
 #SBATCH --time=12:00:00
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=mmazza@fsu.edu
-#SBATCH --output=/blue/avery/m.mazza/projects/fastml/hepattn-paper/src/hepattn/experiments/clic/slurm_logs/slurm-%j.%x.out
+#SBATCH --mail-user=your-email@example.com
+#SBATCH --output=slurm_logs/slurm-%j.%x.out
 
 set -euo pipefail
 
 module load cuda/12.8.1
 export COMET_MODE=offline
 
-REPO=/blue/avery/m.mazza/projects/fastml/hepattn-paper
+# Resolve the repository from wherever this script was submitted, so the job runs against
+# the clone it was launched from instead of one person's checkout. sbatch sets
+# SLURM_SUBMIT_DIR to the directory it was submitted from, which these scripts document as
+# this one; the fallback keeps the script usable when run directly.
+CLIC="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+REPO="$(cd "$CLIC/../../../.." && pwd)"
 CONFIG_PATH="${1:?Usage: sbatch submit_training_b200.sh <config.yaml> [extra main.py args...]}"
 EXTRA_ARGS=("${@:2}")
 

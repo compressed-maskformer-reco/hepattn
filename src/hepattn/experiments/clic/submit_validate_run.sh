@@ -16,7 +16,7 @@
 #          submit_validate_run.sh
 
 #SBATCH -p hpg-turin
-#SBATCH --account=avery
+#SBATCH --account=your-account
 #SBATCH --nodes=1
 #SBATCH --export=ALL
 #SBATCH --gres=gpu:l4:1
@@ -25,15 +25,20 @@
 #SBATCH --mem=50G
 #SBATCH --time=01:00:00
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=mmazza@fsu.edu
-#SBATCH --output=/blue/avery/m.mazza/projects/fastml/hepattn-paper/src/hepattn/experiments/clic/slurm_logs/slurm-%j.%x.out
+#SBATCH --mail-user=your-email@example.com
+#SBATCH --output=slurm_logs/slurm-%j.%x.out
 
 set -euo pipefail
 
 module load cuda/12.8.1
 export COMET_MODE=offline
 
-CLIC=/blue/avery/m.mazza/projects/fastml/hepattn-paper/src/hepattn/experiments/clic
+# Resolve the repository from wherever this script was submitted, so the job runs against
+# the clone it was launched from instead of one person's checkout. sbatch sets
+# SLURM_SUBMIT_DIR to the directory it was submitted from, which these scripts document as
+# this one; the fallback keeps the script usable when run directly.
+CLIC="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+REPO="$(cd "$CLIC/../../../.." && pwd)"
 cd "$CLIC"
 export TMPDIR=/var/tmp/
 
@@ -67,6 +72,6 @@ PYTORCH_CMD="python main.py validate \
   --ckpt_path $CKPT"
 
 apptainer run --nv --bind /blue/,/cmsuf/ \
-  /blue/avery/m.mazza/projects/fastml/hepattn-paper/pixi.sif pixi run -e clic $PYTORCH_CMD
+  "$REPO/pixi.sif" pixi run -e clic $PYTORCH_CMD
 
 echo "Done!"

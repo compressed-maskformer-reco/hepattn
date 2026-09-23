@@ -20,7 +20,7 @@
 # a Linformer run needs studies/linformer/configs/eval_linformer.yaml, whose comment says why.
 
 #SBATCH -p hpg-turin
-#SBATCH --account=avery
+#SBATCH --account=your-account
 #SBATCH --nodes=1
 #SBATCH --export=ALL
 #SBATCH --gres=gpu:l4:1
@@ -30,8 +30,8 @@
 # --time: 1x L4 evaluation of the small model: under 2 min on head code (jobs 41332603-06). 30 min.
 #SBATCH --time=00:30:00
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=mmazza@fsu.edu
-#SBATCH --output=/blue/avery/m.mazza/projects/fastml/hepattn-paper/src/hepattn/experiments/clic/slurm_logs/slurm-%j.%x.out
+#SBATCH --mail-user=your-email@example.com
+#SBATCH --output=slurm_logs/slurm-%j.%x.out
 
 EVAL_CONFIG="${EVAL_CONFIG:-configs/eval.yaml}"
 
@@ -43,7 +43,14 @@ echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
 echo "RUN_NAME: ${RUN_NAME:-<unset, RUN_DIR given>}"
 nvidia-smi
 
-cd /blue/avery/m.mazza/projects/fastml/hepattn-paper/src/hepattn/experiments/clic/
+# Resolve the repository from wherever this script was submitted, so the job runs against
+# the clone it was launched from instead of one person's checkout. sbatch sets
+# SLURM_SUBMIT_DIR to the directory it was submitted from, which these scripts document as
+# this one; the fallback keeps the script usable when run directly.
+CLIC="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+REPO="$(cd "$CLIC/../../../.." && pwd)"
+
+cd "$CLIC"
 echo "Working dir: ${PWD}"
 
 # Resolve the run directory here rather than at submit time, so this can be queued behind a
@@ -81,7 +88,7 @@ PYTORCH_CMD="python main.py test \
 
 PIXI_CMD="pixi run -e clic $PYTORCH_CMD"
 
-APPTAINER_CMD="apptainer run --nv --bind /blue/,/cmsuf/ /blue/avery/m.mazza/projects/fastml/hepattn-paper/pixi.sif $PIXI_CMD"
+APPTAINER_CMD="apptainer run --nv --bind /blue/,/cmsuf/ $REPO/pixi.sif $PIXI_CMD"
 
 echo "Running: $PYTORCH_CMD"
 $APPTAINER_CMD

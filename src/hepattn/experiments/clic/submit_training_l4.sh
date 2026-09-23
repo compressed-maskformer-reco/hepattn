@@ -6,7 +6,7 @@
 
 #SBATCH --job-name=clic-train-l4
 #SBATCH -p hpg-turin
-#SBATCH --account=avery
+#SBATCH --account=your-account
 #SBATCH --nodes=1
 #SBATCH --export=ALL
 #SBATCH --gres=gpu:l4:3
@@ -20,8 +20,15 @@
 # (job 37233919). See README_HPG.md, Measured runtimes.
 #SBATCH --time=27:00:00
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=mmazza@fsu.edu
-#SBATCH --output=/blue/avery/m.mazza/projects/fastml/hepattn-paper/src/hepattn/experiments/clic/slurm_logs/slurm-%j.%x.out
+#SBATCH --mail-user=your-email@example.com
+#SBATCH --output=slurm_logs/slurm-%j.%x.out
+
+# Resolve the repository from wherever this script was submitted, so the job runs against
+# the clone it was launched from instead of one person's checkout. sbatch sets
+# SLURM_SUBMIT_DIR to the directory it was submitted from, which these scripts document as
+# this one; the fallback keeps the script usable when run directly.
+CLIC="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+REPO="$(cd "$CLIC/../../../.." && pwd)"
 
 CONFIG_PATH="${1:?Usage: sbatch submit_training_l4.sh <config.yaml> [extra args]}"
 shift
@@ -37,13 +44,13 @@ export COMET_MODE=offline
 echo "Hostname: $(hostname)"
 echo "CPU count: $(cat /proc/cpuinfo | awk '/^processor/{print $3}' | tail -1)"
 echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
-echo "git commit: $(git -C /blue/avery/m.mazza/projects/fastml/hepattn-paper rev-parse HEAD)"
+echo "git commit: $(git -C "$REPO" rev-parse HEAD)"
 echo "started: $(date -Is)"
 echo "nvidia-smi:"
 nvidia-smi
 
 # Move to workdir
-cd /blue/avery/m.mazza/projects/fastml/hepattn-paper/src/hepattn/experiments/clic/
+cd "$CLIC"
 echo "Moved dir, now in: ${PWD}"
 
 # Set tmpdir
@@ -51,10 +58,10 @@ export TMPDIR=/var/tmp/
 
 # Make the GPU matcher (configs/matcher_jv.yaml) available when its out-of-environment build
 # exists: apptainer forwards APPTAINERENV_* into the container. Harmless when unused.
-TLA_DIR=/blue/avery/m.mazza/projects/fastml/hepattn-paper/vendor/torch-linear-assignment
+TLA_DIR="$REPO/vendor/torch-linear-assignment"
 if [ -d "$TLA_DIR" ]; then
   export APPTAINERENV_PYTHONPATH="$TLA_DIR"
-  export APPTAINERENV_LD_LIBRARY_PATH=/blue/avery/m.mazza/projects/fastml/hepattn-paper/.pixi/envs/clic/lib
+  export APPTAINERENV_LD_LIBRARY_PATH="$REPO/.pixi/envs/clic/lib"
 fi
 
 # configs/hpg.yaml layers the HPG data paths over the model config, which keeps the
@@ -69,7 +76,7 @@ PIXI_CMD="pixi run -e clic $PYTORCH_CMD"
 
 # Apptainer command that runs the pixi command inside the pixi apptainer image.
 # srun in front for multi-GPU DDP; run_task.sh gives each rank a private compile cache.
-APPTAINER_CMD="srun ./run_task.sh apptainer run --nv --bind /blue/,/cmsuf/ /blue/avery/m.mazza/projects/fastml/hepattn-paper/pixi.sif $PIXI_CMD"
+APPTAINER_CMD="srun ./run_task.sh apptainer run --nv --bind /blue/,/cmsuf/ $REPO/pixi.sif $PIXI_CMD"
 
 # Run the final command
 echo "Running command: $APPTAINER_CMD"
