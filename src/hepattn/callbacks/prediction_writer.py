@@ -28,9 +28,6 @@ class PredictionWriter(Callback):
         self.write_losses = write_losses
         self.write_layers = write_layers
 
-        self.file = None
-        self.num_queries: int | None = None
-
     def setup(self, trainer: Trainer, pl_module: LightningModule, stage: str) -> None:
         if stage != "test":
             return
@@ -40,14 +37,8 @@ class PredictionWriter(Callback):
         self.trainer = trainer
         self.dataset = trainer.datamodule.test_dataloader().dataset
 
-        self.num_queries = self._resolve_num_queries(pl_module)
-
         # Open the handle for writing to the file
         self.file = h5py.File(self.output_path, "w")
-
-    def _resolve_num_queries(self, pl_module: LightningModule) -> int:
-        # User assumption: model.decoder._num_queries is always available.
-        return int(pl_module.model.decoder._num_queries)  # noqa: SLF001
 
     @property
     def output_path(self) -> Path:
@@ -129,8 +120,7 @@ class PredictionWriter(Callback):
     def teardown(self, trainer, module, stage):
         # Close the file handle now we are done
         if stage == "test":
-            if self.file is not None:
-                self.file.close()
+            self.file.close()
             print("-" * 80)
             print("Created output file", self.output_path)
             print("-" * 80)

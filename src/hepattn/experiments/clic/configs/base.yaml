@@ -22,9 +22,9 @@ data:
 
   num_objects: &num_particles 150
 
-  train_path: /projects/u5ar/data/clic/train_clic_fix.root
-  valid_path: /projects/u5ar/data/clic/val_clic_fix.root
-  test_path: /projects/u5ar/data/clic/test_clic_common_infer.root
+  train_path: /share/gpu1/syw24/dmitrii_clic/train_clic_fix.root
+  valid_path: /share/gpu1/syw24/dmitrii_clic/val_clic_fix.root
+  test_path: /share/gpu1/syw24/dmitrii_clic/test_clic_fix.root
 
   num_workers: 16
   num_train: -1
@@ -47,9 +47,9 @@ trainer:
   enable_progress_bar: True
 
   logger:
-    class_path: hepattn.utils.loggers.MyCometLogger
+    class_path: lightning.pytorch.loggers.CometLogger
     init_args:
-      project: hepattn-clic
+      project_name: hepattn-clic
 
   callbacks:
     - class_path: hepattn.callbacks.Compile
@@ -90,6 +90,13 @@ model:
     class_path: hepattn.models.MaskFormer
     init_args:
       dim: &dim 256
+      raw_variables:
+        - "node_e"
+        - "node_pt"
+        - "node_eta"
+        - "node_sinphi"
+        - "node_cosphi"
+        - "node_is_track"
 
       input_nets:
         class_path: torch.nn.ModuleList
@@ -139,16 +146,10 @@ model:
       matcher:
         class_path: hepattn.models.matcher.Matcher
         init_args:
-          # lap1015_late needs the GIL-releasing build of the extension (src/lap1015);
-          # rebuild it if the env is reinstalled, otherwise 16-thread matching serialises
-          # and this is ~2x slower than scipy. Invalid permutations fall back to scipy.
-          default_solver: lap1015_late
+          default_solver: scipy
           adaptive_solver: false
           parallel_solver: true
           n_jobs: 16
-          # Opt-in GPU solver, worth it only when training is host-bound (e.g. one B200):
-          # needs the torch-linear-assignment build from setup/build_torch_linear_assignment.sh.
-          # device_solver: jv
 
       tasks:
         class_path: torch.nn.ModuleList
@@ -173,14 +174,14 @@ model:
                     output_size: 6
                     hidden_layers: [256, 128, 32]
                 null_weight: 0.5
-                class_weights: [1.0, 3.0, 8.0, 1.5, 1.0]
+                loss_class_weights: [1.0, 3.0, 8.0, 1.5, 1.0]
                 mask_queries: false
                 has_intermediate_loss: true
 
             - class_path: hepattn.models.task.ObjectHitMaskTask
               init_args:
                 name: mask
-                input_constituent: node
+                input_hit: node
                 input_object: query
                 output_object: pflow
                 target_object: particle
@@ -199,7 +200,7 @@ model:
             - class_path: hepattn.models.task.IncidenceRegressionTask
               init_args:
                 name: incidence
-                input_constituent: node
+                input_hit: node
                 input_object: query
                 output_object: pflow
                 target_object: particle
@@ -212,19 +213,21 @@ model:
                   init_args:
                     input_size: *dim
                     activation: torch.nn.SiLU
-                    hidden_layers: 2
+                    output_size: *dim
+                    hidden_layers: [*dim, *dim]
                 node_net:
                   class_path: hepattn.models.Dense
                   init_args:
                     input_size: *dim
-                    hidden_layers: 1
+                    output_size: *dim
+                    hidden_layers: [*dim]
                 has_intermediate_loss: false
 
             - class_path: hepattn.models.task.IncidenceBasedRegressionTask
               init_args:
                 name: regression
                 fields: ["e", "pt", "eta", "sinphi", "cosphi"]
-                input_constituent: node
+                input_hit: node
                 input_object: query
                 output_object: pflow
                 target_object: particle

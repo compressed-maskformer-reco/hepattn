@@ -47,12 +47,12 @@ data:
 
   # The maximum absolute global eta of a cluster for it to not be dropped
   cluster_max_abs_eta: 2.8
-
+  
   # If set to true, clusters containing a notruth particle will be dropped
   cluster_allow_notruth_particle: true
 
   # If set to false, clusters containing any particle that did not pass the particle selection are dropped
-  cluster_allow_dropped_particle: false
+  cluster_allow_dropped_particle: false  
 
   inputs:
     cluster:
@@ -96,7 +96,7 @@ data:
       - notruth
       - pdgid
       - class_label
-
+    
     cluster:
       - multiplicity
 
@@ -113,10 +113,13 @@ trainer:
   enable_progress_bar: True
   val_check_interval: 1000
 
+  # Specify loggers here
   logger:
-    class_path: hepattn.utils.loggers.MyCometLogger
+    class_path: lightning.pytorch.loggers.CometLogger
     init_args:
-      project: pixel
+      project_name: pixel
+      # We are not using conda and log manually anyway
+      log_env_details: false
 
   # Specify any callback here
   callbacks:
@@ -214,7 +217,7 @@ model:
         class_path: torch.nn.ModuleList
         init_args:
           modules:
-            - class_path: hepattn.models.task.ObjectClassificationTask
+            - class_path: hepattn.models.task.ObjectValidTask
               init_args:
                 name: track_valid
                 input_object: query
@@ -258,3 +261,5 @@ model:
             #       notruth: 2.04
             #     loss_weight: 0.1
             #     dim: *dim
+
+

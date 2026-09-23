@@ -1,5 +1,5 @@
-FIG_W = 10
-FIG_H_1ROW = 2.8
+FIG_W = 12
+FIG_H_1ROW = 4.5
 FIG_DPI = 200
 
 
@@ -7,7 +7,7 @@ LABELS = {
     # algorithms
     "truth": "Truth",
     "ppflow": "PPflow",
-    "Pandora": "Pandora",
+    "pandora": "Pandora",
     "topo": "TopoJet",
     "proxy": "Proxy",
     "hgpflow": "HGPflow",
@@ -28,7 +28,7 @@ COLORS = {
     # algorithms
     "truth": "black",
     "ppflow": "gray",
-    "Pandora": "gray",
+    "pandora": "gray",
     "topo": "orange",
     "proxy": "blue",
     "hgpflow": "firebrick",
@@ -48,7 +48,7 @@ COLORS = {
 HISTTYPES = {
     "truth": "step",
     "ppflow": "bar",
-    "Pandora": "bar",
+    "pandora": "bar",
     "topo": "bar",
     "proxy": "step",
     "hgpflow": "step",
@@ -61,7 +61,7 @@ HISTTYPES = {
 ALPHAS = {
     "truth": 1.0,
     "ppflow": 0.5,
-    "Pandora": 0.5,
+    "pandora": 0.5,
     "topo": 0.5,
     "proxy": 1.0,
     "hgpflow": 1.0,
@@ -74,7 +74,7 @@ ALPHAS = {
 LINE_STYLES = {
     "truth": "--",
     "ppflow": "-",
-    "Pandora": "-",
+    "pandora": "-",
     "topo": "-",
     "proxy": "-",
     "hgpflow": "-",
@@ -87,7 +87,7 @@ LINE_STYLES = {
 LABEL_LEN = {
     "truth": 10,
     "ppflow": 10,
-    "Pandora": 7,
+    "pandora": 7,
     "topo": 10,
     "proxy": 10,
     "hgpflow": 7,

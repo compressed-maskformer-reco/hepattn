@@ -14,3 +14,5 @@
 # Move to download directory
 cd /share/rcifdata/maxhart/data/cld/raw
 echo "Moved dir, now in: ${PWD}"
+
+

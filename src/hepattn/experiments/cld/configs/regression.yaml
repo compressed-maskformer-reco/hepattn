@@ -7,7 +7,7 @@ model:
         class_path: torch.nn.ModuleList
         init_args:
           modules:
-            - class_path: hepattn.models.task.ObjectClassificationTask
+            - class_path: hepattn.models.task.ObjectValidTask
               init_args:
                 name: flow_valid
                 input_object: query
@@ -17,14 +17,14 @@ model:
                   object_bce: 0.1
                 costs:
                   object_bce: 10.0
-                dim: 256
+                dim: *dim
                 null_weight: 1.0
                 mask_queries: false
 
             - class_path: hepattn.models.task.ObjectHitMaskTask
               init_args:
                 name: flow_vtxd_assignment
-                input_constituent: vtxd
+                input_hit: vtxd
                 input_object: query
                 output_object: flow
                 target_object: particle
@@ -36,13 +36,13 @@ model:
                   mask_bce: 10.0
                   #mask_dice: 2.0
                   #mask_focal: 50.0
-                dim: 256
+                dim: *dim
                 null_weight: 1.0
 
             - class_path: hepattn.models.task.ObjectHitMaskTask
               init_args:
                 name: flow_trkr_assignment
-                input_constituent: trkr
+                input_hit: trkr
                 input_object: query
                 output_object: flow
                 target_object: particle
@@ -54,13 +54,13 @@ model:
                   mask_bce: 10.0
                   #mask_dice: 2.0
                   #mask_focal: 50.0
-                dim: 256
+                dim: *dim
                 null_weight: 1.0
 
             - class_path: hepattn.models.task.ObjectHitMaskTask
               init_args:
                 name: flow_ecal_assignment
-                input_constituent: ecal
+                input_hit: ecal
                 input_object: query
                 output_object: flow
                 target_object: particle
@@ -72,13 +72,13 @@ model:
                   mask_bce: 0.1
                   #mask_dice: 2.0
                   #mask_focal: 50.0
-                dim: 256
+                dim: *dim
                 null_weight: 1.0
 
             - class_path: hepattn.models.task.ObjectHitMaskTask
               init_args:
                 name: flow_hcal_assignment
-                input_constituent: hcal
+                input_hit: hcal
                 input_object: query
                 output_object: flow
                 target_object: particle
@@ -90,7 +90,7 @@ model:
                   mask_bce: 0.5
                   #mask_dice: 2.0
                   #mask_focal: 50.0
-                dim: 256
+                dim: *dim
                 null_weight: 1.0
 
             - class_path: hepattn.models.task.ObjectRegressionTask
@@ -99,7 +99,7 @@ model:
                 input_object: query
                 output_object: flow
                 target_object: particle
-                dim: 256
+                dim: *dim
                 loss_weight: 1.0
                 cost_weight: 1.0
                 fields:
@@ -113,11 +113,11 @@ model:
             - class_path: hepattn.models.task.ObjectHitRegressionTask
               init_args:
                 name: flow_vtxd_regression
-                input_constituent: vtxd
+                input_hit: vtxd
                 input_object: query
                 output_object: flow_vtxd
                 target_object: particle_vtxd
-                dim: 256
+                dim: *dim
                 loss_weight: 0.01
                 cost_weight: 0.01
                 fields:
@@ -128,11 +128,11 @@ model:
             - class_path: hepattn.models.task.ObjectHitRegressionTask
               init_args:
                 name: flow_trkr_regression
-                input_constituent: trkr
+                input_hit: trkr
                 input_object: query
                 output_object: flow_trkr
                 target_object: particle_trkr
-                dim: 256
+                dim: *dim
                 loss_weight: 0.01
                 cost_weight: 0.01
                 fields:

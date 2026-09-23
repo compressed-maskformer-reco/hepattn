@@ -1,5 +1,5 @@
 import torch
-from torch import Tensor
+from torch import BoolTensor, Tensor
 
 
 def build_target_masks(object_ids: Tensor, input_ids: Tensor, shuffle: bool = False) -> Tensor:
@@ -23,7 +23,7 @@ def build_target_masks(object_ids: Tensor, input_ids: Tensor, shuffle: bool = Fa
     return input_ids.unsqueeze(-2) == object_ids.unsqueeze(-1)
 
 
-def mask_from_indices(indices: Tensor, num_masks: int | None = None) -> Tensor:
+def mask_from_indices(indices: Tensor, num_masks: int | None = None) -> BoolTensor:
     """Convert a dense index tensor to a sparse bool mask.
 
     Indices are arbitrary and start from 0.
@@ -37,11 +37,11 @@ def mask_from_indices(indices: Tensor, num_masks: int | None = None) -> Tensor:
         num_masks (int | None): The maximum number of masks. If None, inferred from indices.
 
     Returns:
-        Tensor: The sparse mask.
+        BoolTensor: The sparse mask.
     """
     assert indices.ndim in {1, 2}, "indices must be 1D for single sample or 2D for batch"
     if num_masks is None:
-        num_masks = indices.max().item() + 1
+        num_masks = indices.max() + 1
     else:
         assert num_masks > indices.max(), "num_masks must be greater than the maximum value in indices"
 
@@ -59,7 +59,7 @@ def mask_from_indices(indices: Tensor, num_masks: int | None = None) -> Tensor:
     return mask
 
 
-def indices_from_mask(mask: Tensor, noindex: int = -1) -> Tensor:
+def indices_from_mask(mask: BoolTensor, noindex: int = -1) -> Tensor:
     """Convert a sparse bool mask to a dense index tensor.
 
     Indices are arbitrary and start from 0.
@@ -68,7 +68,7 @@ def indices_from_mask(mask: Tensor, noindex: int = -1) -> Tensor:
         [[True, False, False], [False, True, True]] -> [0, 1, 1]
 
     Args:
-        mask (Tensor): The sparse mask.
+        mask (BoolTensor): The sparse mask.
         noindex (int): The value to use for no index. Defaults to -1.
 
     Returns:
@@ -100,20 +100,20 @@ def indices_from_mask(mask: Tensor, noindex: int = -1) -> Tensor:
 
 
 def sanitise_mask(
-    mask: Tensor,
-    input_pad_mask: Tensor | None = None,
+    mask: BoolTensor,
+    input_pad_mask: BoolTensor | None = None,
     object_class_preds: Tensor | None = None,
-) -> Tensor:
+) -> BoolTensor:
     """Sanitise predicted masks by removing padded inputs and null class predictions.
 
     Args:
-        mask (Tensor): The predicted mask.
-        input_pad_mask (Tensor | None): The input pad mask, where a value of True represents a padded input.
+        mask (BoolTensor): The predicted mask.
+        input_pad_mask (BoolTensor | None): The input pad mask, where a value of True represents a padded input.
             Defaults to None.
         object_class_preds (Tensor | None): Object class predictions. Defaults to None.
 
     Returns:
-        Tensor: The sanitised mask.
+        BoolTensor: The sanitised mask.
     """
     if input_pad_mask is not None:
         mask.transpose(1, 2)[input_pad_mask] = False
@@ -127,7 +127,7 @@ def sigmoid_mask(
     mask_logits: Tensor,
     threshold: float = 0.5,
     **kwargs,
-) -> Tensor:
+) -> BoolTensor:
     """Get a mask by thresholding the mask logits.
 
     Args:
@@ -136,7 +136,7 @@ def sigmoid_mask(
         **kwargs: Additional keyword arguments to pass to sanitise_mask.
 
     Returns:
-        Tensor: The thresholded mask.
+        BoolTensor: The thresholded mask.
     """
     mask = mask_logits.sigmoid() > threshold
     return sanitise_mask(mask, **kwargs)
@@ -146,7 +146,7 @@ def argmax_mask(
     mask_logits: Tensor,
     weighted: bool = False,
     **kwargs,
-) -> Tensor:
+) -> BoolTensor:
     """Get a mask by taking the argmax of the mask logits.
 
     Args:
@@ -156,7 +156,7 @@ def argmax_mask(
         **kwargs: Additional keyword arguments to pass to sanitise_mask.
 
     Returns:
-        Tensor: The argmax mask.
+        BoolTensor: The argmax mask.
 
     Raises:
         ValueError: If weighted argmax is requested but object_class_preds is not provided.
@@ -177,19 +177,19 @@ def argmax_mask(
 def mask_from_logits(
     logits: Tensor,
     mode: str,
-    input_pad_mask: Tensor | None = None,
+    input_pad_mask: BoolTensor | None = None,
     object_class_preds: Tensor | None = None,
-) -> Tensor:
+) -> BoolTensor:
     """Convert logits to masks using the specified mode.
 
     Args:
         logits (Tensor): The input logits.
         mode (str): The mode to use for conversion. Must be one of {"sigmoid", "argmax", "weighted_argmax"}.
-        input_pad_mask (Tensor | None): The input pad mask. Defaults to None.
+        input_pad_mask (BoolTensor | None): The input pad mask. Defaults to None.
         object_class_preds (Tensor | None): Object class predictions. Defaults to None.
 
     Returns:
-        Tensor: The converted mask.
+        BoolTensor: The converted mask.
 
     Raises:
         ValueError: If mode is not one of the supported modes.
@@ -204,12 +204,12 @@ def mask_from_logits(
     raise ValueError(f"mode must be one of {modes}")
 
 
-def mask_effs_purs(m_pred: Tensor, m_tgt: Tensor) -> tuple[Tensor, Tensor]:
+def mask_effs_purs(m_pred: BoolTensor, m_tgt: BoolTensor) -> tuple[Tensor, Tensor]:
     """Calculate efficiency and purity for each mask.
 
     Args:
-        m_pred (Tensor): The predicted masks.
-        m_tgt (Tensor): The target masks.
+        m_pred (BoolTensor): The predicted masks.
+        m_tgt (BoolTensor): The target masks.
 
     Returns:
         tuple[Tensor, Tensor]: A tuple containing efficiency and purity tensors.
@@ -219,12 +219,12 @@ def mask_effs_purs(m_pred: Tensor, m_tgt: Tensor) -> tuple[Tensor, Tensor]:
     return eff, pur
 
 
-def mask_eff_pur(m_pred: Tensor, m_tgt: Tensor, flat: bool = False, reduce: bool = False) -> tuple[Tensor, Tensor]:
+def mask_eff_pur(m_pred: BoolTensor, m_tgt: BoolTensor, flat: bool = False, reduce: bool = False) -> tuple[Tensor, Tensor]:
     """Calculate efficiency and purity metrics.
 
     Args:
-        m_pred (Tensor): The predicted masks.
-        m_tgt (Tensor): The target masks.
+        m_pred (BoolTensor): The predicted masks.
+        m_tgt (BoolTensor): The target masks.
         flat (bool): If True, calculate per assignment metric (edgewise). If False, calculate per object metric.
             Defaults to False.
         reduce (bool): If True, reduce to mean values (only applies when flat=False). Defaults to False.
@@ -245,8 +245,8 @@ def mask_eff_pur(m_pred: Tensor, m_tgt: Tensor, flat: bool = False, reduce: bool
 
 
 def reco_metrics(
-    pred_mask: Tensor,
-    tgt_mask: Tensor,
+    pred_mask: BoolTensor,
+    tgt_mask: BoolTensor,
     pred_valid: Tensor | None = None,
     reduce: bool = False,
     min_recall: float = 1.0,
@@ -256,8 +256,8 @@ def reco_metrics(
     """Calculate the efficiency and purity of the predicted objects.
 
     Args:
-        pred_mask (Tensor): The predicted masks.
-        tgt_mask (Tensor): The target masks.
+        pred_mask (BoolTensor): The predicted masks.
+        tgt_mask (BoolTensor): The target masks.
         pred_valid (Tensor | None): Valid prediction mask. If None, inferred from pred_mask. Defaults to None.
         reduce (bool): Whether to reduce to mean values. Defaults to False.
         min_recall (float): Minimum recall threshold. Defaults to 1.0.
@@ -290,7 +290,7 @@ def reco_metrics(
     return eff, fake
 
 
-def topk_attn(attn_scores: Tensor, k: int, dim: int = -1) -> Tensor:
+def topk_attn(attn_scores: Tensor, k: int, dim: int = -1) -> BoolTensor:
     """Keep only the topk scores in each row of the attention matrix.
 
     Args:
@@ -299,9 +299,9 @@ def topk_attn(attn_scores: Tensor, k: int, dim: int = -1) -> Tensor:
         dim (int): The dimension to apply top-k along. Defaults to -1.
 
     Returns:
-        Tensor: A boolean mask with `True` for the top-k scores.
+        BoolTensor: A boolean mask with `True` for the top-k scores.
     """
     _, topk_indices = attn_scores.topk(k, dim=dim)
-    zeros = torch.zeros_like(attn_scores, dtype=torch.bool)
-    src = torch.ones_like(topk_indices, dtype=torch.bool).expand_as(topk_indices)
+    zeros = torch.zeros_like(attn_scores, dtype=bool)
+    src = torch.ones_like(topk_indices, dtype=bool).expand_as(topk_indices)
     return torch.scatter(zeros, dim=dim, index=topk_indices, src=src)

@@ -93,10 +93,11 @@ trainer:
   gradient_clip_val: 0.1
   enable_progress_bar: True
 
+  # Specify loggers here
   logger:
-    class_path: hepattn.utils.loggers.MyCometLogger
+    class_path: lightning.pytorch.loggers.CometLogger
     init_args:
-      project: itk_filtering
+      project_name: itk_filtering
 
   callbacks:
     - class_path: hepattn.callbacks.Compile
@@ -210,7 +211,7 @@ model:
             - class_path: hepattn.models.task.HitFilterTask
               init_args:
                 name: pixel_filter
-                input_object: pixel
+                hit_name: pixel
                 target_field: on_valid_particle
                 dim: *dim
                 threshold: 0.1

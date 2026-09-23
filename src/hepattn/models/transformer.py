@@ -8,9 +8,8 @@ from hepattn.flex import relative_position, relative_position_wrapped
 from hepattn.flex.sliding_window import sliding_window_mask, sliding_window_mask_wrapped
 from hepattn.models.attention import Attention, repad_from_flash_varlen, unpad_for_flash_varlen
 from hepattn.models.dense import Dense
-from hepattn.models.norm import NORM_TYPES, get_hybrid_norm_config
 
-create_block_mask = torch.compile(create_block_mask, dynamic=True)  # ty: ignore[invalid-assignment]
+create_block_mask = torch.compile(create_block_mask, dynamic=True)
 
 SCORE_MODS = {
     "relative_position": relative_position,
@@ -58,31 +57,31 @@ class Residual(nn.Module):
         """Neatly wrap x = x + drop(scale * fn(norm(x))).
 
         Args:
-            dim: Dimension of the input and output.
-            fn: The module to wrap. Must be non-resizing.
-            norm: The normalization layer.
-            post_norm: Whether to apply hybrid norm [2503.04598] style post norm.
-            layer_scale: Initial value for the layer_scale. If None, no layer_scale is applied.
-            drop_path: Drop path rate.
+            dim (int): The dimension of the input and output.
+            fn (nn.Module): The module to wrap. Must be non-resizing.
+            norm (str, optional): The normalization layer.
+            post_norm (bool, optional): Instead of standard pre-norm, apply norm before the residual (post-norm for the previous op).
+            layer_scale (float | None, optional): The initial value for the layer_scale. If None, then no layer_scale is applied.
+            drop_path (float, optional): The drop path rate.
 
         Raises:
             ValueError: If the input arguments are invalid.
         """
         super().__init__()
-
-        if post_norm and not norm:
-            raise ValueError("post_norm is True but no norm is provided.")
-        if norm is not None and not isinstance(norm, str):
-            raise ValueError("norm must be a string or None.")
-        if norm is not None and norm not in NORM_TYPES:
-            raise ValueError(f"Unsupported norm: {norm}. Must be one of {list(NORM_TYPES.keys())}")
-
         self.fn = fn
         self.ls = LayerScale(dim, layer_scale) if layer_scale is not None else nn.Identity()
         self.dp = DropPath(drop_path) if drop_path else nn.Identity()
         self.post_norm = post_norm
 
-        self.norm = NORM_TYPES[norm](dim) if norm else nn.Identity()
+        if isinstance(norm, str):
+            try:
+                self.norm = getattr(nn, norm)(dim, elementwise_affine=False)
+            except AttributeError as e:
+                raise ValueError(f"Unsupported norm: {norm}. Must be a valid torch.nn module.") from e
+        elif norm is None:
+            self.norm = nn.Identity()
+        else:
+            raise ValueError(f"Unsupported norm: {norm}. Must be a string or None.")
 
     def forward(self, x: Tensor, **kwargs) -> Tensor:
         if self.post_norm:
@@ -100,31 +99,44 @@ class EncoderLayer(nn.Module):
         layer_scale: float | None = None,
         drop_path: float = 0.0,
         value_residual: bool = False,
-        qkv_norm: bool = False,
         hybrid_norm: bool = False,
         dense_kwargs: dict | None = None,
         attn_kwargs: dict | None = None,
     ) -> None:
-        """Encoder layer: self-attention followed by feed-forward.
+        """Encoder layer: self-attention -> feed-forward.
 
-        Args:
-            dim: Dimension of the embeddings.
-            depth: The depth of the layer.
-            norm: The normalization layer.
-            drop_path: Drop path rate.
-            layer_scale: Initial layer_scale value.
-            value_residual: Whether to apply a residual connection from initial values.
-            qkv_norm: Whether to use qkv norm in the Attention layer
-            hybrid_norm: Whether to use HybridNorm from 2503.04598.
-            dense_kwargs: Keyword arguments for dense layer.
-            attn_kwargs: Keyword arguments for self-attention layer.
+        Parameters
+        ----------
+        dim : int
+            Dimension of the embeddings.
+        depth : int
+            The depth of the layer.
+        norm : str, optional
+            The normalization layer.
+        drop_path : float, optional
+            Drop path rate.
+        layer_scale : float | None, optional
+            Initial layer_scale value.
+        value_residual : bool, optional
+            Whether to apply a residual connection from initial values.
+        hybrid_norm : bool, optional
+            Whether to use HybridNorm from 2503.04598.
+        dense_kwargs : dict | None, optional
+            Keyword arguments for dense layer.
+        attn_kwargs : dict | None, optional
+            Keyword arguments for self-attention layer.
         """
         super().__init__()
 
         attn_kwargs = attn_kwargs or {}
         dense_kwargs = dense_kwargs or {}
 
-        attn_norm, dense_post_norm, qkv_norm = get_hybrid_norm_config(norm, depth, hybrid_norm, qkv_norm)
+        # handle hybrid norm
+        qkv_norm = hybrid_norm
+        if depth == 0:
+            hybrid_norm = False
+        attn_norm = norm if not hybrid_norm else None
+        dense_post_norm = not hybrid_norm
 
         # handle value residual
         attn_kwargs["value_residual"] = value_residual
@@ -132,7 +144,7 @@ class EncoderLayer(nn.Module):
 
         self.dim = dim
         residual = partial(Residual, dim=dim, layer_scale=layer_scale, drop_path=drop_path)
-        self.attn = residual(Attention(self.dim, qkv_norm=qkv_norm, norm=norm, **attn_kwargs), norm=attn_norm)
+        self.attn = residual(Attention(self.dim, qkv_norm=qkv_norm, **attn_kwargs), norm=attn_norm)
         self.dense = residual(Dense(self.dim, **dense_kwargs), norm=norm, post_norm=dense_post_norm)
 
     def forward(self, x: Tensor, **kwargs) -> Tensor:
@@ -154,17 +166,22 @@ class Encoder(nn.Module):
     ) -> None:
         """Transformer encoder.
 
-        Args:
-            num_layers: Number of layers.
-            dim: Dimension of the embeddings at each layer.
-            attn_type: Type of attention to use.
-            window_size: Window size for the sliding window.
-            window_wrap: Whether to wrap the window by wrapping the input sequence or the mask, depending on the attn_type.
-            score_mod: Score modification function.
-            value_residual: Add a residual connection from the initial layer values.
-            num_register_tokens: Number of register tokens to add at the beginning of the sequence. If None, no register tokens are added.
-                Register tokens are removed from the output by default.
-            **layer_kwargs: Keyword arguments for EncoderLayer.
+        Parameters
+        ----------
+        num_layers : int
+            Number of layers.
+        dim : int
+            Dimension of the embeddings at each layer.
+        window_size : int | None, optional
+            The window size for the sliding window.
+        value_residual : bool, optional
+            Add a residual connection from the initial layer values.
+        num_register_tokens : int | None, optional
+            Number of register tokens to add at the beginning of the sequence.
+            If None, no register tokens are added. Register tokens are removed
+            from the output by default.
+        kwargs : dict
+            Keyword arguments for EncoderLayer.
         """
         super().__init__()
 
@@ -206,7 +223,7 @@ class Encoder(nn.Module):
         for layer in self.layers:
             self.attn_type = layer.attn.fn.set_backend(self.attn_type)
 
-    def forward(self, x: Tensor, x_sort_value: Tensor | None = None, kv_mask: Tensor | None = None, **kwargs) -> Tensor:
+    def forward(self, x: Tensor, x_sort_value: Tensor | None = None, **kwargs) -> Tensor:
         batch_size = x.shape[0]
         seq_len = x.shape[-2]
 
@@ -214,12 +231,8 @@ class Encoder(nn.Module):
         # We don't need to use the stable sort assuming that the sort values are unique
         x_sort_idx = None
         if x_sort_value is not None:
-            x_sort_idx = torch.argsort(x_sort_value, dim=-1)
-            x = torch.gather(x, dim=-2, index=x_sort_idx.unsqueeze(-1).expand_as(x))
-
-            # Also permute the kv mask if we have one
-            if kv_mask is not None:
-                kv_mask = torch.gather(kv_mask, dim=-1, index=x_sort_idx)
+            x_sort_idx = torch.argsort(x_sort_value, axis=-1)
+            x = torch.gather(x, -2, x_sort_idx.unsqueeze(-1).expand_as(x))
 
         # Add register tokens at the beginning of the sequence
         if self.register_tokens is not None:
@@ -227,13 +240,14 @@ class Encoder(nn.Module):
             x = torch.cat([register_tokens, x], dim=1)
 
             # Allow registers to participate in attention if a mask is provided
-            if kv_mask is not None:
+            if (kv_mask := kwargs.get("kv_mask")) is not None:
                 register_mask = torch.full((1, self.num_register_tokens), True, device=kv_mask.device, dtype=kv_mask.dtype).expand(batch_size, -1)
-                kv_mask = torch.cat([register_mask, kv_mask], dim=1)
+                kwargs["kv_mask"] = torch.cat([register_mask, kv_mask], dim=1)
 
         # Handle flash-varlen attention unpadding at encoder level
         varlen_kwargs = None
-        if self.attn_type == "flash-varlen" and kv_mask is not None:
+        if self.attn_type == "flash-varlen" and kwargs.get("kv_mask") is not None:
+            kv_mask = kwargs["kv_mask"]
             x, indices, varlen_kwargs = unpad_for_flash_varlen(x, kv_mask)
             kwargs["varlen_kwargs"] = varlen_kwargs
         elif self.attn_type == "flash-varlen":
@@ -249,10 +263,10 @@ class Encoder(nn.Module):
         # Handle masking
         attn_mask = None
         if self.attn_type == "torch" and self.mask_mod:
-            attn_mask = create_mask(self.mask_mod, 1, 1, seq_len, seq_len, device=str(x.device))
+            attn_mask = create_mask(self.mask_mod, 1, 1, seq_len, seq_len, device=x.device)
         elif self.attn_type == "flex" and self.mask_mod:
             self.seq_len[0] = seq_len
-            attn_mask = create_block_mask(self.mask_mod, B=None, H=None, Q_LEN=seq_len, KV_LEN=seq_len, device=str(x.device))
+            attn_mask = create_block_mask(self.mask_mod, B=None, H=None, Q_LEN=seq_len, KV_LEN=seq_len, device=x.device)
 
         # Add wrapping for flash attention with sliding window
         if self.attn_type == "flash" and self.window_wrap:
@@ -261,7 +275,7 @@ class Encoder(nn.Module):
         # Apply layers
         initial_values = {} if self.value_residual else None
         for layer in self.layers:
-            x = layer(x, attn_mask=attn_mask, score_mod=self.score_mod, initial_values=initial_values, kv_mask=kv_mask, **kwargs)
+            x = layer(x, attn_mask=attn_mask, score_mod=self.score_mod, initial_values=initial_values, **kwargs)
 
         # Remove wrapping for flash attention with sliding window
         if self.attn_type == "flash" and self.window_wrap:
@@ -275,24 +289,19 @@ class Encoder(nn.Module):
         # Remove register tokens
         if self.register_tokens is not None:
             x = x[:, self.num_register_tokens :]
-            if kv_mask is not None:
-                kv_mask = kv_mask[:, self.num_register_tokens :]
+            if (kv_mask := kwargs.get("kv_mask")) is not None:
+                kwargs["kv_mask"] = kv_mask[:, self.num_register_tokens :]
 
         # If we sorted the tokens, undo the sorting
         if x_sort_value is not None and x_sort_idx is not None:
-            x_unsort_idx = torch.argsort(x_sort_idx, dim=-1)
+            x_unsort_idx = torch.argsort(x_sort_idx, axis=-1)
             x = torch.gather(x, -2, x_unsort_idx.unsqueeze(-1).expand_as(x))
 
         return x
 
 
 def change_attn_backends(module: nn.Module, backend: str) -> None:
-    """Recursively change the attention backend of a module and all its children.
-
-    Args:
-        module: The module to update.
-        backend: The attention backend to set.
-    """
+    """Recursively change the attention backend of a module and all its children."""
     if isinstance(module, Encoder):
         module.set_backend(backend)
         return

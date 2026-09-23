@@ -1,67 +1,33 @@
-# Glow: Particle Flow with CLIC
-
-This work is described in our preprint: [GLOW: A Unified Transformer for Diverse Reconstruction Tasks in Particle Physics](https://arxiv.org/abs/2508.20092)
-
-We present GLOW, a transformer-based particle flow model that combines incidence matrix supervision from HGPflow with a MaskFormer architecture. Evaluated on CLIC detector simulations, GLOW achieves state-of-the-art performance and, together with prior work, demonstrates that a single unified transformer architecture can effectively address diverse reconstruction tasks in particle physics.
-
-## Running the Model
-
-Everything for CLIC runs in the `clic` pixi environment. It contains the whole GPU
-training stack (torch with CUDA, flash-attention, the compiled `lap1015` solver) plus
-the analysis packages (`fastjet`, `energyflow`, `vector`, `pathos`), so training,
-evaluation and the performance notebooks all use this one environment. There is no
-need to install the `default` environment described in the top level
-[README.md](../../../../README.md); that one serves the other experiments and lacks the
-analysis packages.
-
-Clone the repository, enter the pixi container, and install and activate the `clic`
-environment:
+## Running the model
 
 ```shell
-git clone git@github.com:samvanstroud/hepattn.git
 cd hepattn
 apptainer shell --nv --bind /share/ pixi.sif
-pixi install -e clic --locked
-pixi shell -e clic
-cd src/hepattn/experiments/clic/
-```
-
-The install takes a while the first time (the environment is about 15 GB). The
-container is only needed on systems whose `libc` is older than 2.28; see the top level
-README for the pull command and the alternatives.
-
-If you don't already have the CLIC data, download it from one of the locations listed in the [CLIC Data](#clic-data) section below.
-
-To run the model, use the following commands:
-
-```shell
-# interactive job
+pixi shell
+cd hepattn/src/hepattn/experiments/clic/
 python main.py fit --config configs/base.yaml
-
-# slurm batch
 sbatch hepattn/src/hepattn/experiments/clic/submit_training_sam.sh
 ```
 
 ## Evaluation
 
-To evaluate a trained model, run the following command:
+To evaluate the model you need to run the following command:
 
 ```shell
 python main.py test \
-    --config <path to config.yaml> \
+    -c <path to config.yaml> \
     --data.test_path test_clic_common_infer.root \
     --data.is_inference true \
     --trainer.precision 32-true \
-    --matmul_precision highest
+    --matmutl_precision highest
 ```
 
-**Important Notes:**
-- Flags `--data.is_inference true` and `--trainer.precision 32-true` are required for correct evaluation of model performance.
-- Change the attention type to `torch` in the config file.
-- Remove the compile callback if present in the config file.
+- Flags `--data.is_inference true` and `--trainer.precision 32-true` are important for correct evaluation of the model performance.
+- **Don't forget to change the attention type to `torch` in the config file.**
+- **You may also need to remove the compile callback if present in the config file.**
 
-You can then produce the performance plots using the [provided notebook](notebooks/performance.ipynb).
-To start a Jupyter notebook on a compute node:
+
+To start a notebook on a compute node:
 
 ```shell
 jupyter notebook --no-browser --ip=0.0.0.0 --port 8888
@@ -69,32 +35,21 @@ jupyter notebook --no-browser --ip=0.0.0.0 --port 8888
 
 ## CLIC Data
 
+At UCL, files are available on `plus1` under `/unix/atlastracking/svanstroud/dmitrii_clic`, and also on `hypatia` under `/share/gpu1/syw24/dmitrii_clic`.
 
-You can obtain the CLIC data from one of the following locations.
-You only need the `train_clic_fix.root`, `val_clic_fix.root`, and `test_clic_common_infer.root` files (see the [training config](./configs/base.yaml)).
-
-- **cernbox**: https://cernbox.cern.ch/s/XDBTOMTqCfSYxlK
-- **plus1**: `/unix/atlastracking/svanstroud/dmitrii_clic/`
-- **hypatia**: `/share/gpu1/syw24/dmitrii_clic/`
-- **isambard**: `/projects/u5ar/data/clic/`
-
-For more details on the preprocessing, see Section 5.1 in [[2410.23236](https://arxiv.org/pdf/2410.23236)].
-
-### Data Files Overview
-
-| File Name | Purpose | Preprocessing | Notes |
+| File Name | Purpose / Usage | Preprocessing Applied | Notes / Details |
 | :------------------------------ | :------------------------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `train_clic` | Training | Train-like | Cuts on tracks/topoclusters/truth particles; creates target incidence matrix |
-| `val_clic` | Validation | Train-like | Cuts on tracks/topoclusters/truth particles; creates target incidence matrix |
-| `test_clic_raw.root` | Performance evaluation | None (raw) | - |
-| `test_clic_fix.root` | MPflow comparison | Train-like | Cuts on tracks/topoclusters/truth particles; creates target incidence matrix |
-| `test_clic_common_raw.root` | Performance evaluation | None (raw) | Same events as Nilotpal's evaluation |
-| `test_clic_common_infer.root` | Inference evaluation | Infer-like | No cuts; CLIC format conversion; correct truth particles; use `data.is_inference true` |
+| `train_clic` | For **training** the model. | "Train-like" preprocessing | Applies cuts on tracks, topoclusters, and truth particles; creates target incidence matrix. |
+| `val_clic` | For **validation** during model development. | "Train-like" preprocessing | Applies cuts on tracks, topoclusters, and truth particles; creates target incidence matrix. |
+| `test_clic_raw.root` | For **performance evaluation**. | **None** ("raw" file) | - |
+| `test_clic_fix.root` | Used by MPflow to compare preprocessed targets with model predictions. | "Train-like" preprocessing | Applies cuts on tracks, topoclusters, and truth particles; creates target incidence matrix. |
+| `test_clic_common_raw.root` | For **performance evaluation**. | **None** ("raw" file) | Contains the **same events as Nilotpal's evaluation**. |
+| `test_clic_common_infer.root` | Evaluates the **real performance** of the model during inference. | "Infer-like" preprocessing | Does not apply cuts; converts CLIC format, removes unused variables, correctly defines truth particles. Should be launched with `data.is_inference true` flag. Contains the **same events as Nilotpal's evaluation**. |
 
-### Preprocessing Definitions
+**Definition of Preprocessing Types:**
 
-- **"Train-like"**: Applies cuts on tracks, topoclusters, and truth particles, and creates target incidence matrix.
-- **"Infer-like"**: No cuts applied; converts CLIC format, removes unused variables, and correctly defines truth particles.
-- **"Raw"**: Original CLIC files with correctly defined truth particles.
+* **"Train-like"**: Applies cuts on tracks, topoclusters, and truth particles, and creates target incidence matrix.
+* **"Infer-like"**: No cuts applied; converts CLIC format, removes unused variables, and correctly defines truth particles.
+* **"Raw"**: Original CLIC files with correctly defined truth particles.
 
-**Truth Particles**: Refer to Section 5.1 in [https://arxiv.org/pdf/2410.23236](https://arxiv.org/pdf/2410.23236).
+**"Truth Particles"**: Refer to Section 5.1 in [https://arxiv.org/pdf/2410.23236](https://arxiv.org/pdf/2410.23236).

@@ -66,10 +66,11 @@ trainer:
   gradient_clip_val: 0.1
   enable_progress_bar: True
 
+  # Specify loggers here
   logger:
-    class_path: hepattn.utils.loggers.MyCometLogger
+    class_path: lightning.pytorch.loggers.CometLogger
     init_args:
-      project: trackml_filtering
+      project_name: trackml_filtering
 
   callbacks:
     - class_path: hepattn.callbacks.Compile
@@ -133,6 +134,7 @@ model:
                   init_args:
                     input_size: 16
                     output_size: &dim 256
+                    norm_input: true
                 posenc:
                   class_path: hepattn.models.FourierPositionEncoder
                   init_args:

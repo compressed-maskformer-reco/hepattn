@@ -1,46 +1,57 @@
 import torch
 import torch.nn.functional as F
-
-# resolve flash attention import
-try:
-    # FA3 (from source)
-    from flash_attn_interface import flash_attn_func, flash_attn_varlen_func  # ty: ignore [unresolved-import]
-except ImportError:
-    try:
-        # FA2 (from wheel)
-        from flash_attn import flash_attn_func, flash_attn_varlen_func  # ty: ignore [unresolved-import]
-    except ImportError:
-        flash_attn_func = None  # ty: ignore [conflicting-declarations]
-        flash_attn_varlen_func = None  # ty: ignore [conflicting-declarations]
-
-from torch import Size, Tensor, nn
+from flash_attn import flash_attn_func, flash_attn_varlen_func
+from flash_attn.bert_padding import pad_input, unpad_input
+from torch import BoolTensor, Size, Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask, _score_mod_signature, flex_attention
 from torch.nn.functional import scaled_dot_product_attention
 
-from hepattn.models.norm import NORM_TYPES
-from hepattn.utils.bert_padding import pad_input, unpad_input
+from hepattn.models.norm import LayerNorm
 
-ATTN_TYPES = {"torch": scaled_dot_product_attention, "flex": flex_attention, "flash": flash_attn_func, "flash-varlen": flash_attn_varlen_func}
+ATTN_TYPES = {
+    "torch": scaled_dot_product_attention,
+    "flex": flex_attention,
+    "flash": flash_attn_func,
+    "flash-varlen": flash_attn_varlen_func,
+}
 
 # Which attentiom types support varlen / kv padding
-VARLEN_ATTN_TYPES = ["torch", "flash-varlen"]
+VARLEN_ATTN_TYPES = [
+    "torch",
+    "flash-varlen",
+]
 
 # Which attention types support attention masking
-ATTN_MASK_ATTN_TYPES = ["torch", "flex"]
+ATTN_MASK_ATTN_TYPES = [
+    "torch",
+]
 
 # Which attention types support attention biasing
-ATTN_BIAS_ATTN_TYPES = ["torch"]
+ATTN_BIAS_ATTN_TYPES = [
+    "torch",
+]
 
 # Which attention types support windowed attention
-WINDOW_ATTN_TYPES = ["flash", "flash-varlen"]
+WINDOW_ATTN_TYPES = [
+    "flash",
+    "flash-varlen",
+]
 
 # For now basically just defines which attention types expect (B, S, H, Dh) instead of (B, H, S, Dh)
-FLASH_ATTN_TYPES = ["flash", "flash-varlen"]
+FLASH_ATTN_TYPES = [
+    "flash",
+    "flash-varlen",
+]
 
 
 def merge_masks(
-    q_mask: Tensor | None, kv_mask: Tensor | None, attn_mask: Tensor | None, q_shape: Size, k_shape: Size, device: torch.device
-) -> Tensor | None:
+    q_mask: BoolTensor | None,
+    kv_mask: BoolTensor | None,
+    attn_mask: BoolTensor | None,
+    q_shape: Size,
+    k_shape: Size,
+    device: torch.device,
+) -> BoolTensor:
     """Create a full attention mask which incoporates the padding information.
     Modified from https://gitlab.cern.ch/atlas-flavor-tagging-tools/algorithms/salt/-/blob/main/salt/models/attention.py?ref_type=heads
     to use the convention that true slots are involved in computation / not masked out.
@@ -76,20 +87,23 @@ def repad_from_flash_varlen(x: Tensor, batch_size: int, seq_len: int, indices: T
     return pad_input(x.squeeze(0), indices, batch_size, seq_len)
 
 
-def projection_packed(q: Tensor, k: Tensor, v: Tensor, weight: Tensor, bias: Tensor | None = None) -> tuple[Tensor, ...]:
+def projection_packed(
+    q: Tensor,
+    kv: Tensor | None,
+    weight: Tensor,
+    bias: Tensor | None = None,
+) -> tuple[Tensor, Tensor, Tensor]:
     """Efficient input projection for MHA when using a single linear layer.
 
     Essentially the same as torch.nn.functional._in_projection_packed.
-    Used for nested tensors, but has issues with flex attention.
+    Used for netsted tensors, but has issues with flex attention.
 
     Parameters
     ----------
     q : Tensor
         The queries tensor of shape (batch, q_len, dim).
-    k : Tensor
-        The keys tensor of shape (batch, kv_len, dim).
-    v : Tensor
-        The values tensor of shape (batch, kv_len, dim).
+    kv : Tensor | None
+        The keys and values tensor of shape (batch, kv_len, dim).
     weight : Tensor
         The packed weight tensor of the input linear projection with shape (3 * dim, dim).
     bias : Tensor | None
@@ -100,37 +114,25 @@ def projection_packed(q: Tensor, k: Tensor, v: Tensor, weight: Tensor, bias: Ten
     q_proj, k_proj, v_proj : tuple
         The projected queries, keys, and values tensors.
     """
-    # If the queries, key and value tensors are equal, then we assume we are doing self-attention.
+    # If the q tensor is the only input, then we assume we are doing self-attention.
     # This is made (slightly) faster by using a single linear layer, then chunking rather than
-    # three separate linear layers processed one at a time.
-    if q is k and k is v:
+    # three seperate linear layers processed one at a time.
+    if kv is None:
         return F.linear(q, weight, bias).chunk(3, dim=-1)
 
-    # If the q != k tensor, then we are doing cross-attention.
-    # This means we must project the q and kv tensors separately.
-    # If k == v, the kv linear layer can remain packed, allowing us to project together then chunk,
-    # using the same trick as above. We must however first separate weights (and biases if present)
-    # of the linear layers for the q and kv parts. We use torch.split which returns a view of the
-    # original tensor so this step doesn't require any extra memory or much time.
-    if k is v:
-        dim = q.size(-1)
-        w_q, w_kv = weight.split([dim, dim * 2])
-        b_q, b_kv = bias.split([dim, dim * 2]) if bias is not None else (None, None)
-
-        # Now we can do the separate projections
-        q_proj = F.linear(q, w_q, b_q)
-        k_proj, v_proj = F.linear(k, w_kv, b_kv).chunk(2, dim=-1)
-        return q_proj, k_proj, v_proj
-
-    # All three tensors are different, so we need to split and project separately
+    # If the kv tensor is present, then we are doing cross-attention.
+    # This means we must project the q and kv tensors seperately.
+    # The kv linear layer can remain packed, allowing us to project together then chunk,
+    # using the same trick as above. We must however first seperate weights (and biases if present)
+    # of the linear layers for the q and kv parts. We use torch.split which returns a veiw of the
+    # original tensor so this step doesnt required any extra memory or much time.
     dim = q.size(-1)
-    w_q, w_k, w_v = weight.chunk(3, dim=0)
-    b_q, b_k, b_v = bias.chunk(3, dim=0) if bias is not None else (None, None, None)
+    w_q, w_kv = weight.split([dim, dim * 2])
+    b_q, b_kv = bias.split([dim, dim * 2]) if bias is not None else (None, None)
 
-    # Now we can do the separate projections
+    # Now we can do the seperate projections
     q_proj = F.linear(q, w_q, b_q)
-    k_proj = F.linear(k, w_k, b_k)
-    v_proj = F.linear(v, w_v, b_v)
+    k_proj, v_proj = F.linear(kv, w_kv, b_kv).chunk(2, dim=-1)
     return q_proj, k_proj, v_proj
 
 
@@ -144,43 +146,20 @@ class Attention(nn.Module):
         torch_compile: bool = False,
         window_size: int | None = None,
         qkv_norm: bool = False,
-        norm: str | None = None,
         value_residual: bool = False,
         is_first_layer: bool = False,
     ) -> None:
-        """Multi-head attention with optional QKV normalization.
-
-        Args:
-            dim: Embedding dimension (must be divisible by num_heads).
-            num_heads: Number of attention heads.
-            bias: Whether to use bias in linear projections.
-            attn_type: Attention backend ('torch', 'flex', 'flash', 'flash-varlen').
-            torch_compile: Whether to compile the attention function.
-            window_size: Window size for sliding window attention (flash/flash-varlen only).
-            qkv_norm: Whether to normalize Q, K, V after projection, before attention.
-                Recommended for cross-attention to prevent distribution mismatch between Q and K/V.
-            norm: Normalization type to use for QKV normalization (required if qkv_norm=True).
-                Must be one of: LayerNorm, RMSNorm, FastLayerNorm, CustomRMSNorm, SimpleRMSNorm, DyT.
-            value_residual: Whether to use value residual connections across layers.
-            is_first_layer: Whether this is the first layer (for value residual).
-
-        Raises:
-            ValueError: If qkv_norm is True but norm is not provided, or if norm type is unsupported.
-        """
         super().__init__()
         assert dim % num_heads == 0, "num_heads must divide dim."
         assert attn_type in ATTN_TYPES, f"Invalid attention type: {attn_type}"
         assert window_size is None or attn_type in WINDOW_ATTN_TYPES, f"Window size can only be specified for {WINDOW_ATTN_TYPES}"
-        if qkv_norm and not norm:
-            raise ValueError("norm must be provided when qkv_norm is True")
-        if norm is not None and norm not in NORM_TYPES:
-            raise ValueError(f"Unsupported norm: {norm}. Must be one of {list(NORM_TYPES.keys())}")
 
         self.dim = dim
         self.bias = bias
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.attn_type = attn_type
+        self.window_size = None
         self.qkv_norm = qkv_norm
         self.value_residual = value_residual
         self.is_first_layer = is_first_layer
@@ -193,17 +172,12 @@ class Attention(nn.Module):
             self.value_residual_mix = nn.Sequential(nn.Linear(dim, num_heads), nn.Sigmoid())
 
         if self.qkv_norm:
-            assert norm is not None
-            norm_cls = NORM_TYPES[norm]
-            self.q_norm = norm_cls(dim)
-            self.k_norm = norm_cls(dim)
-            self.v_norm = norm_cls(dim)
+            self.q_norm = LayerNorm(dim)
+            self.k_norm = LayerNorm(dim)
+            self.v_norm = LayerNorm(dim)
 
-        self.set_backend(attn_type, torch_compile=torch_compile, window_size=window_size)
         self.reset_parameters()
-
-        if window_size and not self.window_size:
-            raise ValueError("window_size not set correctly")
+        self.set_backend(attn_type, torch_compile=torch_compile, window_size=window_size)
 
     def reset_parameters(self):
         """Initialize the parameters."""
@@ -220,11 +194,10 @@ class Attention(nn.Module):
             raise ValueError(f"Invalid attention type: {attn_type}")
         self.attn = ATTN_TYPES[attn_type]
 
-        self.window_size = None
         if attn_type in FLASH_ATTN_TYPES:
             # TODO: Will need to change when supporting window with flex
             self.window_size = (window_size // 2, window_size // 2) if window_size is not None else (-1, -1)
-        if torch_compile:
+        if torch_compile or attn_type == "flex":
             self.attn = torch.compile(self.attn, dynamic=True)
         return self.attn_type
 
@@ -239,13 +212,7 @@ class Attention(nn.Module):
             x = x.transpose(-3, -2)  # B H S Dh -> B S H Dh
         return x.flatten(-2)  # B S H Dh -> B S D
 
-    def _prepare_qkv(
-        self,
-        q: Tensor,
-        k: Tensor,
-        v: Tensor,
-        initial_values: dict | None = None,
-    ) -> tuple[Tensor, Tensor, Tensor]:
+    def _prepare_qkv(self, q: Tensor, kv: Tensor | None = None, initial_values: dict | None = None) -> tuple[Tensor, Tensor, Tensor]:
         # Mix for value residual
         mix = None
         if self.value_residual and not self.is_first_layer:
@@ -257,9 +224,11 @@ class Attention(nn.Module):
         # Check if the input is nested tensor
         if q.is_nested:
             # If it is a nested tensor, we need to project the packed input
-            q, k, v = projection_packed(q, k, v, self.in_proj_weight, self.in_proj_bias)
+            q, k, v = projection_packed(q, kv, self.in_proj_weight, self.in_proj_bias)
         else:
-            q, k, v = F._in_projection_packed(q, k, v, self.in_proj_weight, self.in_proj_bias)  # noqa: SLF001  # ty: ignore [unresolved-attribute]
+            if kv is None:
+                kv = q
+            q, k, v = F._in_projection_packed(q, kv, kv, self.in_proj_weight, self.in_proj_bias)  # noqa: SLF001
 
         # Normalize queries, keys, and values
         if self.qkv_norm:
@@ -277,29 +246,31 @@ class Attention(nn.Module):
             if self.is_first_layer:
                 initial_values["v"] = v
             else:
-                assert mix is not None
                 v = v * mix + initial_values["v"] * (1.0 - mix)
 
         return q, k, v
 
-    def _flash_varlen_attention(self, q: Tensor, k: Tensor, v: Tensor, cu_seqlens: Tensor, max_seqlen: int) -> Tensor:
+    def _flash_varlen_attention(
+        self,
+        q: Tensor,
+        k: Tensor,
+        v: Tensor,
+        cu_seqlens: Tensor,
+        max_seqlen: int,
+    ) -> Tensor:
         # Assume unpadding has been handled by the caller, so inputs are (1, total_valid_tokens, dim)
         # Flatten for flash attention which expects (total_valid_tokens, num_heads, head_dim)
         q_flat, k_flat, v_flat = q.squeeze(0), k.squeeze(0), v.squeeze(0)
-        # torch.compile can break AMP autocast, leaving fp32 tensors that flash_attn rejects
-        if q_flat.dtype == torch.float32:
-            q_flat, k_flat, v_flat = q_flat.to(torch.bfloat16), k_flat.to(torch.bfloat16), v_flat.to(torch.bfloat16)
         out = self.attn(q_flat, k_flat, v_flat, cu_seqlens, cu_seqlens, max_seqlen, max_seqlen, window_size=self.window_size)
         return out.view(q.shape[0], -1, self.dim)
 
     def forward(
         self,
         q: Tensor,
-        k: Tensor | None = None,
-        v: Tensor | None = None,
-        q_mask: Tensor | None = None,
-        kv_mask: Tensor | None = None,
-        attn_mask: BlockMask | Tensor | None = None,
+        kv: Tensor | None = None,
+        q_mask: BoolTensor | None = None,
+        kv_mask: BoolTensor | None = None,
+        attn_mask: BlockMask | BoolTensor | None = None,
         attn_bias: Tensor | None = None,
         score_mod: _score_mod_signature | None = None,
         initial_values: dict | None = None,
@@ -311,19 +282,17 @@ class Attention(nn.Module):
         ----------
         q : Tensor
             Queries tensor of shape (B, N, D).
-        k : Tensor, optional
+        kv : Tensor, optional
             Keys tensor of shape (B, M, D). If None, defaults to q.
-        v : Tensor, optional
-            Values tensor of shape (B, M, D). If None, defaults to k.
-        q_mask : Tensor, optional
+        q_mask : BoolTensor, optional
             Query mask to apply. If None, no mask is applied.
             True values indicate that a value is not padded and should partake in computation.
             Note: For flash-varlen, this is ignored as unpadding is handled by the encoder.
-        kv_mask : Tensor, optional
+        kv_mask : BoolTensor, optional
             Key/value mask to apply. If None, no mask is applied.
             True values indicate that a value is not padded and should partake in computation.
             Note: For flash-varlen, this is ignored as unpadding is handled by the encoder.
-        attn_mask : BlockMask | Tensor, optional
+        attn_mask : BlockMask | BoolTensor, optional
             Attention mask to apply. If None, no mask is applied.
             True values indicate that an attention slot should partake in computation.
             Expected shape is (B, M, M).
@@ -341,16 +310,13 @@ class Attention(nn.Module):
         Raises:
             ValueError: If the input arguments are invalid or if flash-varlen is used without varlen_kwargs.
         """
-        q_shape = q.shape
-        if k is None and v is None:  # Self-attention
-            k = v = q
-            kv_shape = q.shape
-        else:  # Cross-attention
-            assert k is not None, "k must be provided for cross-attention"
-            if v is None:
-                v = k
-            kv_shape = k.shape
-            assert k.shape == v.shape, f"Shape mismatch: k.shape={k.shape} vs v.shape={v.shape}"
+        if kv is None:
+            # If self-attention, we use the same tensor for q, k, and v
+            q_shape = kv_shape = q.shape
+        else:
+            # If cross-attention, we expect q and kv to be different tensors
+            q_shape = q.shape
+            kv_shape = kv.shape
 
         # Check that the specified attention backend actualy supports kv masking / jagged inputs
         if kv_mask is not None:
@@ -366,7 +332,7 @@ class Attention(nn.Module):
             assert self.attn_type in ATTN_BIAS_ATTN_TYPES, msg
 
         # Prepare queries, keys, and values
-        q, k, v = self._prepare_qkv(q, k, v, initial_values)
+        q, k, v = self._prepare_qkv(q, kv, initial_values)
 
         # Handle flash-varlen attention
         if self.attn_type == "flash-varlen":
@@ -378,17 +344,11 @@ class Attention(nn.Module):
 
         # Fused attention
         if self.attn_type == "flex":
-            assert isinstance(attn_mask, BlockMask) or attn_mask is None, "Flex attention requires a BlockMask for attention masking."
-            assert not kv_mask, "Flex attention with key/value padding masks is not supported yet."
-            # Batch size > 1 only supported when no block_mask is provided
-            if attn_mask is not None:
-                assert q.shape[0] == 1, "Flex attention with block_mask currently only supports batch size of 1."
             # TODO: Should block_mask be an argument separate from attn_mask to simplify things?
             out = self.attn(q, k, v, block_mask=attn_mask, score_mod=score_mod)
 
         # Standard torch attention
         elif self.attn_type == "torch":
-            assert not isinstance(attn_mask, BlockMask)  # Should be handled by flex attention if needed
             attn_mask = merge_masks(q_mask, kv_mask, attn_mask, q_shape, kv_shape, q.device)
             # Have to expand the attention mask so that it is broadcasted over the head dimension
             if attn_mask is not None and attn_mask.dim() == 3:

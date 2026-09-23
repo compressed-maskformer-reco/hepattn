@@ -31,7 +31,7 @@ python run_filtering.py test --config PATH --data.test_dir /share/rcifdata/maxha
 ## Tracking
 
 ```shell
-# train
+# train 
 python run_tracking.py fit --config configs/tracking.yaml --trainer.fast_dev_run 10
 
 # test
@@ -49,14 +49,6 @@ sbatch /share/rcifdata/svanstroud/hepattn/src/hepattn/experiments/trackml/submit
 
 ## Configurations
 
-A central pixel detector with a low pt cut:
-
-```yaml
-hit_volume_ids: [7, 8, 9] # pixel barrel and endcaps
-particle_min_pt: 0.6
-particle_max_abs_eta: 2.5
-```
-
 A full pixel detector with a reasonable pt cut for targeting >1GeV particles:
 
 ```yaml
@@ -65,11 +57,15 @@ particle_min_pt: 0.9
 particle_max_abs_eta: 4.0
 ```
 
+
+
+
+
 A more lightweight configuration for testing purposes:
 
 ```yaml
 hit_volume_ids: [8] # pixel barrel only
-particle_min_pt: 0.9
+particle_min_pt: 1.0
 particle_max_abs_eta: 2.5
 ```
 

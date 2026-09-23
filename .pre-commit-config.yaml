@@ -1,27 +1,29 @@
 repos:
   - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: "v0.13.0"
+    rev: "v0.12.4"
     hooks:
       - id: ruff
-        args: [--fix, --exit-non-zero-on-fix, --preview]
+        args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
 
   - repo: https://github.com/adrienverge/yamllint.git
-    rev: v1.37.1
+    rev: v1.32.0
     hooks:
       - id: yamllint
         args: ["-d", "{extends: relaxed, rules: {line-length: disable}}"]
 
-  - repo: https://github.com/kynan/nbstripout
-    rev: 0.8.1
+  - repo: local
     hooks:
-      - id: nbstripout
-        args: [--keep-id]
+      - id: format-yaml
+        name: ruamel-yaml
+        entry: python src/hepattn/utils/fix_yaml.py
+        language: system
+        types: [yaml]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+    rev: v4.4.0
     hooks:
-      - id: no-commit-to-branch
-        args: ["--branch", "main"]
       - id: trailing-whitespace
+        types: [yaml]
       - id: end-of-file-fixer
+        types: [yaml]

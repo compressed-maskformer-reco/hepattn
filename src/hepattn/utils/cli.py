@@ -6,7 +6,6 @@ import numpy as np
 import torch
 from jsonargparse.typing import register_type
 from lightning.pytorch.cli import LightningCLI
-from lightning.pytorch.loggers import CSVLogger
 
 torch._dynamo.config.capture_scalar_outputs = True  # noqa: SLF001
 
@@ -49,7 +48,11 @@ def get_best_epoch(config_path: Path) -> Path:
 
 class CLI(LightningCLI):
     def add_arguments_to_parser(self, parser) -> None:
-        parser.add_argument("--name", type=str, default="hepattn", help="Name for this training run.")
+        parser.add_argument(
+            "--name",
+            default="hepattn",
+            help="Name for this training run.",
+        )
 
         parser.add_argument(
             "--matmul_precision",
@@ -59,8 +62,9 @@ class CLI(LightningCLI):
             help="Precision setting for float32 matrix multiplications.",
         )
 
+        parser.link_arguments("name", "trainer.logger.init_args.experiment_name")
         parser.link_arguments("name", "model.name")
-        parser.link_arguments("name", "trainer.logger.init_args.name")
+        parser.link_arguments("trainer.default_root_dir", "trainer.logger.init_args.save_dir")
 
     def before_instantiate_classes(self) -> None:
         sc = self.config[self.subcommand]
@@ -84,7 +88,7 @@ class CLI(LightningCLI):
             log_dir_timestamp = str(Path(log_dir / dirname).resolve())
             sc["trainer.default_root_dir"] = log_dir_timestamp
             if sc[log]:
-                sc[f"{log}.init_args.offline_directory"] = log_dir_timestamp
+                sc[f"{log}.init_args.save_dir"] = log_dir_timestamp
 
         if self.subcommand == "test":
             # Modify callbacks when testing
@@ -98,7 +102,7 @@ class CLI(LightningCLI):
             if sc["ckpt_path"] is None:
                 config = sc["config"]
                 assert len(config) == 1
-                best_epoch_path = get_best_epoch(Path(config[0].relative))
+                best_epoch_path = get_best_epoch(Path(config[0].rel_path))
                 sc["ckpt_path"] = best_epoch_path
 
             # Ensure only one device is used for testing
@@ -110,27 +114,13 @@ class CLI(LightningCLI):
                 raise ValueError("Testing requires --trainer.devices=1")
 
         # Set the matmul precision
-        if sc.get("matmul_precision"):
-            torch.set_float32_matmul_precision(sc["matmul_precision"])
+        torch.set_float32_matmul_precision(sc["matmul_precision"])
 
     def after_instantiate_classes(self) -> None:
         sc = self.config[self.subcommand]
 
-        # Persist train + val losses to disk as a metrics.csv, independent of the Comet
-        # logger. On clusters without internet / COMET_API_KEY the CometLogger runs offline
-        # and its archive is not reliably persisted, so train-loss was being lost (only
-        # val-loss survived, via the checkpoint filenames). A CSVLogger writes every logged
-        # metric (train/loss, val/loss, per-layer/per-task breakdowns) per step+epoch to
-        # <run_dir>/csv_metrics/metrics.csv. Added post-instantiation so it does not disturb
-        # the single-logger `name`/`offline_directory` wiring set up in the parser.
-        # Only when logging is enabled: `logger: false` must stay logger-free, and the
-        # CSVLogger must not become loggers[0], which Checkpoint assumes is Comet-like.
-        if self.subcommand == "fit" and self.trainer.loggers and not any(type(lg).__name__ == "CSVLogger" for lg in self.trainer.loggers):
-            csv_logger = CSVLogger(save_dir=self.trainer.default_root_dir, name="csv_metrics", version="")
-            self.trainer.loggers = [*self.trainer.loggers, csv_logger]
-
         if self.subcommand == "test":
-            ckpt_path = sc["ckpt_path"] or get_best_epoch(Path(sc["config"][0].relative))
+            ckpt_path = sc["ckpt_path"] or get_best_epoch(Path(sc["config"][0].rel_path))
             # Workaround to store ckpt dir for prediction writer since trainer.ckpt_path gets set to none somewhere
             # TODO: Figure out what causes trainer.ckpt_path to be set to none
             self.trainer.ckpt_path = ckpt_path

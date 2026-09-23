@@ -15,6 +15,7 @@ model:
     init_args:
       input_size: 17
       output_size: &dim 256
+      norm_input: true
 
   pos_enc:
     class_path: hepattn.models.PositionEncoderRandom
@@ -116,9 +117,9 @@ trainer:
   default_root_dir: logs
 
   logger:
-    class_path: hepattn.utils.loggers.MyCometLogger
+    class_path: lightning.pytorch.loggers.CometLogger
     init_args:
-      project: hepattn
+      project_name: hepattn
       display_summary_level: 0
 
   callbacks:
