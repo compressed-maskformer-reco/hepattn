@@ -243,8 +243,8 @@ def require_jv(device: torch.device | None = None):
     """
     try:
         # The private backend, for has_cuda(): a build-time property with no public accessor.
-        import torch_linear_assignment._backend as backend  # noqa: PLC0415, PLC2701
-        from torch_linear_assignment import batch_linear_assignment  # noqa: PLC0415
+        import torch_linear_assignment._backend as backend  # noqa: PLC0415, PLC2701  # ty: ignore[unresolved-import]
+        from torch_linear_assignment import batch_linear_assignment  # noqa: PLC0415  # ty: ignore[unresolved-import]
     except ImportError as exc:
         raise RuntimeError(
             "The 'jv' device solver needs torch-linear-assignment, which is not importable. "

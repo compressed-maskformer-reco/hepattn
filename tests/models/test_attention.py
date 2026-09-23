@@ -16,6 +16,7 @@ torch.manual_seed(42)
 def copy_attention_weights(src: Attention, dst: Attention):
     dst.in_proj_weight.data.copy_(src.in_proj_weight.data)
     if src.in_proj_bias is not None:
+        assert dst.in_proj_bias is not None
         dst.in_proj_bias.data.copy_(src.in_proj_bias.data)
     dst.out_proj.weight.data.copy_(src.out_proj.weight.data)
     if src.out_proj.bias is not None:

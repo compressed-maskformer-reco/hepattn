@@ -9,7 +9,7 @@ from hepattn.flex.sliding_window import sliding_window_mask, sliding_window_mask
 from hepattn.models.attention import Attention, repad_from_flash_varlen, unpad_for_flash_varlen
 from hepattn.models.dense import Dense
 
-create_block_mask = torch.compile(create_block_mask, dynamic=True)
+compiled_create_block_mask = torch.compile(create_block_mask, dynamic=True)
 
 SCORE_MODS = {
     "relative_position": relative_position,
@@ -237,7 +237,7 @@ class Encoder(nn.Module):
                 # in amongst the real tokens: zero-padded inputs would land wherever zero falls
                 # in the ordering. Send them to the end, keeping the real tokens contiguous.
                 x_sort_value = torch.where(kv_mask, x_sort_value, float("inf"))
-            x_sort_idx = torch.argsort(x_sort_value, axis=-1)
+            x_sort_idx = torch.argsort(x_sort_value, dim=-1)
             x = torch.gather(x, -2, x_sort_idx.unsqueeze(-1).expand_as(x))
             if kv_mask is not None:
                 # The mask indexes the sequence, so it has to follow the same permutation
@@ -275,7 +275,7 @@ class Encoder(nn.Module):
             attn_mask = create_mask(self.mask_mod, 1, 1, seq_len, seq_len, device=x.device)
         elif self.attn_type == "flex" and self.mask_mod:
             self.seq_len[0] = seq_len
-            attn_mask = create_block_mask(self.mask_mod, B=None, H=None, Q_LEN=seq_len, KV_LEN=seq_len, device=x.device)
+            attn_mask = compiled_create_block_mask(self.mask_mod, B=None, H=None, Q_LEN=seq_len, KV_LEN=seq_len, device=x.device)
 
         # Add wrapping for flash attention with sliding window
         if self.attn_type == "flash" and self.window_wrap:
@@ -303,7 +303,7 @@ class Encoder(nn.Module):
 
         # If we sorted the tokens, undo the sorting
         if x_sort_value is not None and x_sort_idx is not None:
-            x_unsort_idx = torch.argsort(x_sort_idx, axis=-1)
+            x_unsort_idx = torch.argsort(x_sort_idx, dim=-1)
             x = torch.gather(x, -2, x_unsort_idx.unsqueeze(-1).expand_as(x))
 
         return x

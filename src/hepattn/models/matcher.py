@@ -326,7 +326,7 @@ class Matcher(nn.Module):
         # sentinel used for invalid queries below: scipy treats inf as a forbidden
         # assignment and a huge finite cost identically, while lap1015 has undefined
         # behaviour on non-finite input.
-        big = float(np.finfo(np.float32).max / 10)
+        big = float(np.divide(np.finfo(np.float32).max, 10, dtype=np.float32))
         costs = torch.nan_to_num(costs, nan=big, posinf=big, neginf=-big)
 
         # If we have invalid/padded queries, set their costs to a high value

@@ -13,7 +13,7 @@ except ImportError:
     pad_input = None  # ty: ignore [conflicting-declarations]
     unpad_input = None  # ty: ignore [conflicting-declarations]
 
-from torch import BoolTensor, Size, Tensor, nn
+from torch import Size, Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask, _score_mod_signature, flex_attention
 from torch.nn.functional import scaled_dot_product_attention
 
@@ -60,13 +60,13 @@ FLASH_ATTN_TYPES = [
 
 
 def merge_masks(
-    q_mask: BoolTensor | None,
-    kv_mask: BoolTensor | None,
-    attn_mask: BoolTensor | None,
+    q_mask: Tensor | None,
+    kv_mask: Tensor | None,
+    attn_mask: Tensor | None,
     q_shape: Size,
     k_shape: Size,
     device: torch.device,
-) -> BoolTensor:
+) -> Tensor | None:
     """Create a full attention mask which incoporates the padding information.
     Modified from https://gitlab.cern.ch/atlas-flavor-tagging-tools/algorithms/salt/-/blob/main/salt/models/attention.py?ref_type=heads
     to use the convention that true slots are involved in computation / not masked out.
@@ -91,6 +91,7 @@ def merge_masks(
 
 def unpad_for_flash_varlen(x: Tensor, kv_mask: Tensor) -> tuple[Tensor, Tensor, dict]:
     """Unpad input for flash-varlen attention and return unpadded tensor and state."""
+    assert unpad_input is not None, "flash-varlen requires flash-attn"
     x_flat, indices, cu_seqlens, max_seqlen, _ = unpad_input(x, kv_mask.int())  # x_flat is (total_valid_tokens, dim)
     varlen_kwargs = {"cu_seqlens": cu_seqlens, "max_seqlen": max_seqlen}
     return x_flat.unsqueeze(0), indices, varlen_kwargs
@@ -99,6 +100,7 @@ def unpad_for_flash_varlen(x: Tensor, kv_mask: Tensor) -> tuple[Tensor, Tensor, 
 def repad_from_flash_varlen(x: Tensor, batch_size: int, seq_len: int, indices: Tensor) -> Tensor:
     """Repad output from flash-varlen attention."""
     # x is currently (1, total_valid_tokens, dim), flatten to (total_valid_tokens, dim) before repadding
+    assert pad_input is not None, "flash-varlen requires flash-attn"
     return pad_input(x.squeeze(0), indices, batch_size, seq_len)
 
 
@@ -133,7 +135,8 @@ def projection_packed(
     # This is made (slightly) faster by using a single linear layer, then chunking rather than
     # three seperate linear layers processed one at a time.
     if kv is None:
-        return F.linear(q, weight, bias).chunk(3, dim=-1)
+        q_proj, k_proj, v_proj = F.linear(q, weight, bias).chunk(3, dim=-1)
+        return q_proj, k_proj, v_proj
 
     # If the kv tensor is present, then we are doing cross-attention.
     # This means we must project the q and kv tensors seperately.
@@ -281,7 +284,7 @@ class Attention(nn.Module):
         else:
             if kv is None:
                 kv = q
-            q, k, v = F._in_projection_packed(q, kv, kv, self.in_proj_weight, self.in_proj_bias)  # noqa: SLF001
+            q, k, v = F._in_projection_packed(q, kv, kv, self.in_proj_weight, self.in_proj_bias)  # noqa: SLF001  # ty: ignore[unresolved-attribute]
 
         # Normalize queries, keys, and values
         if self.qkv_norm:
@@ -299,6 +302,7 @@ class Attention(nn.Module):
             if self.is_first_layer:
                 initial_values["v"] = v
             else:
+                assert mix is not None
                 v = v * mix + initial_values["v"] * (1.0 - mix)
 
         return q, k, v
@@ -324,9 +328,9 @@ class Attention(nn.Module):
         self,
         q: Tensor,
         kv: Tensor | None = None,
-        q_mask: BoolTensor | None = None,
-        kv_mask: BoolTensor | None = None,
-        attn_mask: BlockMask | BoolTensor | None = None,
+        q_mask: Tensor | None = None,
+        kv_mask: Tensor | None = None,
+        attn_mask: BlockMask | Tensor | None = None,
         attn_bias: Tensor | None = None,
         score_mod: _score_mod_signature | None = None,
         initial_values: dict | None = None,
@@ -411,6 +415,7 @@ class Attention(nn.Module):
 
         # Standard torch attention
         elif self.attn_type == "torch":
+            assert not isinstance(attn_mask, BlockMask), "BlockMask requires flex attention"
             attn_mask = merge_masks(q_mask, kv_mask, attn_mask, q_shape, kv_shape, q.device)
             # Have to expand the attention mask so that it is broadcasted over the head dimension
             if attn_mask is not None and attn_mask.dim() == 3:

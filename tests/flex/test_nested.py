@@ -17,7 +17,7 @@ def create_block_mask_cached(score_mod, B, H, M, N, device="cuda"):  # noqa: N80
 
 
 # Compile the flex_attention function
-flex_attention = torch.compile(flex_attention, dynamic=False)
+compiled_flex_attention = torch.compile(flex_attention, dynamic=False)
 torch.manual_seed(0)
 
 
@@ -34,8 +34,8 @@ def prepare_qkv_values(tensor):
 
 
 def build_seq_idx(tensor: torch.Tensor):
-    offsets = tensor.offsets()
-    total_length = tensor.offsets()[-1].item()
+    offsets = tensor.offsets()  # ty: ignore[unresolved-attribute]
+    total_length = tensor.offsets()[-1].item()  # ty: ignore[unresolved-attribute]
     # Create a range tensor from 0 to total_length
     range_tensor = torch.arange(total_length, device="cuda", dtype=torch.int32)
 
@@ -74,7 +74,7 @@ def test_flex_nested():
     value = torch.nested.nested_tensor(ragged_tensors, layout=torch.jagged, requires_grad=True)
 
     # Build the seq_idx lookup table for
-    offsets = query.offsets()
+    offsets = query.offsets()  # ty: ignore[unresolved-attribute]
     seq_idx = build_seq_idx(query)
 
     causal_score_mod_njt = create_njt_wrapper(causal_mask, offsets, seq_idx)
@@ -84,7 +84,7 @@ def test_flex_nested():
     value_values = prepare_qkv_values(value)
 
     block_mask = create_block_mask_cached(causal_score_mod_njt, 1, 1, total, total, device=query_values.device)
-    out_flex = flex_attention(
+    out_flex = compiled_flex_attention(
         query_values.view(1, -1, n_heads, D).transpose(1, 2),
         key_values.view(1, -1, n_heads, D).transpose(1, 2),
         value_values.view(1, -1, n_heads, D).transpose(1, 2),
@@ -106,8 +106,9 @@ def test_flex_nested():
     out_sdpa.backward(grad_out)
     sdpa_outs += [query.grad, key.grad, value.grad]
 
+    assert isinstance(out_flex, torch.Tensor)
     flex_outs.append(out_flex)
-    out_flex.backward(grad_out._values.unsqueeze(0))  # noqa: SLF001
+    out_flex.backward(grad_out.values().unsqueeze(0))
     flex_outs += [query_values.grad, key_values.grad, value_values.grad]
 
     for flex, sdpa in zip(flex_outs, sdpa_outs, strict=False):

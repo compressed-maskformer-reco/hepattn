@@ -218,7 +218,9 @@ class MaskFormerDecoderLayer(nn.Module):
             self.kv_ca = residual(Attention(dim, qkv_norm=qkv_norm, **kv_ca_attn_kwargs), norm=attn_norm)
             self.kv_dense = residual(Dense(dim, **dense_kwargs), norm=norm, post_norm=dense_post_norm)
 
-    def forward(self, q: Tensor, kv: Tensor, attn_mask: Tensor | None = None, q_mask: Tensor | None = None, kv_mask: Tensor | None = None) -> Tensor:
+    def forward(
+        self, q: Tensor, kv: Tensor, attn_mask: Tensor | None = None, q_mask: Tensor | None = None, kv_mask: Tensor | None = None
+    ) -> tuple[Tensor, Tensor]:
         if self.mask_attention:
             assert attn_mask is not None, "attn_mask must be provided for mask attention"
             attn_mask = attn_mask.detach()

@@ -17,7 +17,8 @@ def qkv():
 
 
 def causal_fa2(qkv):
-    return F.scaled_dot_product_attention(*qkv, is_causal=False)
+    q, k, v = qkv
+    return F.scaled_dot_product_attention(q, k, v, is_causal=False)
 
 
 def sdpa_mask(qkv):
