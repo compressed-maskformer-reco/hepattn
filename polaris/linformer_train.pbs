@@ -1,0 +1,117 @@
+#!/bin/bash -l
+#PBS -N clic-linformer
+#PBS -l select=1:system=polaris
+#PBS -l place=scatter
+#PBS -l walltime=48:00:00
+#PBS -j oe
+#
+# Submit with submit_linformer.sh, which injects -A / -q / -l filesystems from env.sh.
+# One Polaris node = 4x A100-40GB. Lightning spawns the 4 DDP ranks itself
+# (trainer.devices: 4), so this launches ONE python process, not mpiexec.
+
+set -euo pipefail
+
+export REPO_DIR="${REPO_DIR:?REPO_DIR not set}"
+cd "${REPO_DIR}"
+source polaris/env.sh
+
+# A venv disables user-site by default, but be explicit: a stale ~/.local can shadow
+# the venv's torch and produce a CUDA-version mismatch.
+export PYTHONNOUSERSITE=1
+
+# The venv and the repo live in DIFFERENT places on Polaris: deps were installed under
+# WORK_ROOT (/eagle), while this branch is checked out in $HOME. hepattn itself is NOT
+# installed into the venv (uv sync --no-install-project), so PYTHONPATH alone decides
+# which clone runs -- and the /eagle clone sits on keras-hgq2. Get this wrong and the job
+# trains the WRONG code and still looks healthy.
+VENV_DIR="${VENV_DIR:-${WORK_ROOT}/hepattn/.venv}"
+if [ ! -f "${VENV_DIR}/bin/activate" ]; then
+  echo "FATAL: no venv at ${VENV_DIR} (override with VENV_DIR=...)" >&2
+  exit 1
+fi
+source "${VENV_DIR}/bin/activate"
+export PYTHONPATH="${REPO_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
+
+# Preflight: prove we are about to train THIS checkout, with linformer available.
+python - <<PYCHK || exit 1
+import os, sys, hepattn
+repo = os.environ["REPO_DIR"]
+if not hepattn.__file__.startswith(os.path.join(repo, "src")):
+    sys.exit(f"FATAL: hepattn resolves to {hepattn.__file__}, not {repo}/src")
+from hepattn.models.linformer import LinformerAttention  # noqa: F401
+print(f"preflight OK: hepattn -> {hepattn.__file__}")
+PYCHK
+
+# Polaris puts NVHPC's `nvc` on PATH as the default C compiler. Triton builds its CUDA
+# helper with $CC and passes GCC-only flags, which nvc rejects:
+#   nvc-Error-Unknown switch: -Wno-psabi
+# This is NOT avoidable by dropping the Compile callback -- loss.py wraps every cost
+# function in torch.compile at import time, so Triton is always exercised.
+export CC="${CC_OVERRIDE:-$(command -v gcc || true)}"
+export CXX="${CXX_OVERRIDE:-$(command -v g++ || true)}"
+if [ -z "${CC}" ]; then
+  echo "FATAL: no gcc on PATH; Triton cannot build (set CC_OVERRIDE=/path/to/gcc)" >&2
+  exit 1
+fi
+echo "==> Triton C compiler: ${CC} ($(${CC} --version 2>/dev/null | head -1))"
+
+export OMP_NUM_THREADS=8            # 32 cores / 4 ranks
+export COMET_OFFLINE_DIRECTORY="${WORK_ROOT}/comet-offline"
+mkdir -p "$COMET_OFFLINE_DIRECTORY"
+
+# Which arm to train. On the paper-tag trunk the arms differ from quadratic_polaris.yaml only in
+# the encoder attention block (link32*) and, for the sorted arm, data.sort_nodes_by.
+CFG="${CFG:-src/hepattn/experiments/clic/configs/linformer_polaris.yaml}"
+[ -f "${REPO_DIR}/${CFG}" ] || { echo "FATAL: no config at ${REPO_DIR}/${CFG}" >&2; exit 1; }
+echo "==> config ${CFG}"
+
+# SMOKE: prove the config runs on real GPUs and real data before burning 30 h.
+SMOKE_ARGS=""
+if [ "${SMOKE:-0}" = "1" ]; then
+  # >=40 steps required: OneCycleLR phase 1 spans (pct_start*total_steps - 1) steps, so
+  # pct_start=0.05 with 20 steps gives a span of 0 and get_lr() divides by zero.
+  # 100 also yields a usable it/s to extrapolate the 200-epoch wall time.
+  SMOKE_ARGS="--trainer.max_epochs 1 --trainer.limit_train_batches 100 --trainer.limit_val_batches 10"
+  echo "==> SMOKE MODE: 100 train / 10 val batches, 1 epoch"
+fi
+
+# EPOCHS lets a submission shorten the run without editing the config. OneCycleLR sizes
+# itself from total steps, so a 50-epoch run is a FULLY ANNEALED schedule, not a truncated
+# 200-epoch one -- the confound is "trained 50 vs 200 epochs", nothing subtler.
+EPOCH_ARG=""
+if [ -n "${EPOCHS:-}" ]; then
+  EPOCH_ARG="--trainer.max_epochs ${EPOCHS}"
+  echo "==> epochs overridden to ${EPOCHS}"
+fi
+
+# LOG_ROOT moves the run directory (config.yaml, ckpts/, csv_metrics/) off $HOME. A 200-epoch
+# run writes ~200 x 120 MB of checkpoints; the 45 GB home quota killed the quadratic arm at
+# epoch 162 that way. Point it at project space, e.g. LOG_ROOT=/eagle/<project>/<you>/logs.
+LOG_ARG=""
+if [ -n "${LOG_ROOT:-}" ]; then
+  mkdir -p "${LOG_ROOT}"
+  LOG_ARG="--trainer.default_root_dir ${LOG_ROOT}"
+  echo "==> run directory under ${LOG_ROOT}"
+fi
+
+RESUME_ARG=""
+if [ -n "${RESUME_CKPT:-}" ]; then
+  RESUME_ARG="--ckpt_path ${RESUME_CKPT}"
+  echo "==> resuming from ${RESUME_CKPT}"
+fi
+
+echo "==> host $(hostname)"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
+echo "==> starting $(date -Is)"
+
+cd src/hepattn/experiments/clic
+python main.py fit \
+  --config "${REPO_DIR}/${CFG}" \
+  --data.train_path "${DATA_ROOT}/train_clic_fix.root" \
+  --data.valid_path "${DATA_ROOT}/val_clic_fix.root" \
+  --data.test_path  "${DATA_ROOT}/val_clic_fix.root" \
+  --trainer.devices 4 \
+  --trainer.num_nodes 1 \
+  ${SMOKE_ARGS} ${EPOCH_ARG} ${RESUME_ARG} ${LOG_ARG}
+
+echo "==> finished $(date -Is)"

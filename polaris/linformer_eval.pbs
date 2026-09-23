@@ -1,0 +1,61 @@
+#!/bin/bash -l
+#PBS -N clic-linformer-eval
+#PBS -l select=1:system=polaris
+#PBS -l place=scatter
+#PBS -l walltime=01:00:00
+#PBS -j oe
+#
+# Inference from a trained checkpoint -> <ckpt>__test.{h5,root} next to the ckpt.
+# Works for any arm: the encoder attention type is read from the run's config.yaml.
+# Submit with polaris/submit_linformer_eval.sh (injects -A / -q / filesystems).
+
+set -euo pipefail
+
+export REPO_DIR="${REPO_DIR:?REPO_DIR not set}"
+cd "${REPO_DIR}"
+source polaris/env.sh
+
+export PYTHONNOUSERSITE=1
+VENV_DIR="${VENV_DIR:-${WORK_ROOT}/hepattn/.venv}"
+source "${VENV_DIR}/bin/activate"
+export PYTHONPATH="${REPO_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
+export CC="${CC_OVERRIDE:-$(command -v gcc || true)}"   # Triton needs gcc, not nvc
+export CXX="${CXX_OVERRIDE:-$(command -v g++ || true)}"
+
+CKPT="${CKPT:?set CKPT=path/to/checkpoint.ckpt}"
+# Resolve to absolute BEFORE the cd below: a path from `ls -t` is relative to REPO_DIR,
+# and both --config ${RUN_DIR}/config.yaml and --ckpt_path would then miss.
+case "${CKPT}" in /*) ;; *) CKPT="${REPO_DIR}/${CKPT}" ;; esac
+[ -f "${CKPT}" ] || { echo "FATAL: no checkpoint at ${CKPT}" >&2; exit 1; }
+RUN_DIR="$(cd "$(dirname "$(dirname "${CKPT}")")" && pwd)"
+[ -f "${RUN_DIR}/config.yaml" ] || { echo "FATAL: no config.yaml in ${RUN_DIR}" >&2; exit 1; }
+echo "==> ckpt    ${CKPT}"
+echo "==> run dir ${RUN_DIR}"
+
+# configs/eval.yaml forces encoder.attn_type=torch (it predates Linformer). Re-assert the
+# encoder the checkpoint was TRAINED with, read from the run's own saved config, so this
+# one script evaluates both arms. Hard-coding linformer here would wrap a quadratic
+# checkpoint in a Linformer encoder and fail on the state dict (or worse, half-load).
+ENC_ATTN="$(python - "${RUN_DIR}/config.yaml" <<'PY'
+import sys, yaml
+cfg = yaml.safe_load(open(sys.argv[1]))
+enc = cfg["model"]["model"]["init_args"]["encoder"]
+print(enc.get("init_args", enc)["attn_type"])
+PY
+)"
+case "${ENC_ATTN}" in linformer|torch|flash|flash-varlen|flex) ;; *) echo "FATAL: cannot read encoder attn_type from ${RUN_DIR}/config.yaml (got '${ENC_ATTN}')" >&2; exit 1 ;; esac
+echo "==> encoder attn_type (from run config): ${ENC_ATTN}"
+nvidia-smi --query-gpu=index,name --format=csv,noheader
+
+cd src/hepattn/experiments/clic
+python main.py test \
+  --config "${RUN_DIR}/config.yaml" \
+  --config configs/eval.yaml \
+  --data.test_path "${DATA_ROOT}/test_clic_common_infer.root" \
+  --model.model.init_args.encoder.init_args.attn_type="${ENC_ATTN}" \
+  --trainer.devices=1 \
+  --trainer.num_nodes=1 \
+  --ckpt_path "${CKPT}"
+
+echo "==> outputs:"
+ls -la "${RUN_DIR}/ckpts/" | grep -E "__test\.(h5|root)" || echo "  NONE WRITTEN"
