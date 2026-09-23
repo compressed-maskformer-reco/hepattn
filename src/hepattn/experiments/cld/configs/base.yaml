@@ -610,4 +610,3 @@ model:
                   #mask_focal: 0.1
                 dim: *dim
                 null_weight: 1.0
-
