@@ -1,7 +1,18 @@
 import torch
 import torch.nn.functional as F
-from flash_attn import flash_attn_func, flash_attn_varlen_func
-from flash_attn.bert_padding import pad_input, unpad_input
+
+# resolve flash attention imports: the CPU environments (and CI) do not install
+# flash-attn, and importing it unconditionally makes this module — and so every
+# model that reaches it — impossible to import there.
+try:
+    from flash_attn import flash_attn_func, flash_attn_varlen_func  # ty: ignore [unresolved-import]
+    from flash_attn.bert_padding import pad_input, unpad_input  # ty: ignore [unresolved-import]
+except ImportError:
+    flash_attn_func = None  # ty: ignore [conflicting-declarations]
+    flash_attn_varlen_func = None  # ty: ignore [conflicting-declarations]
+    pad_input = None  # ty: ignore [conflicting-declarations]
+    unpad_input = None  # ty: ignore [conflicting-declarations]
+
 from torch import BoolTensor, Size, Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask, _score_mod_signature, flex_attention
 from torch.nn.functional import scaled_dot_product_attention
