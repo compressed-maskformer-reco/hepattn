@@ -12,12 +12,13 @@ import scipy
 import torch
 from torch import nn
 
-from hepattn.models.device_lap import assignment_to_permutation, batched_jv, require_jv
+from hepattn.models.device_lap import assignment_to_permutation, batched_auction, batched_jv, require_jv
 from hepattn.utils.import_utils import check_import_safe
 
 # Solvers that run on whichever device the costs are already on, rather than on the host.
 # Opt-in via Matcher(device_solver=...); see the module docstring of hepattn.models.device_lap.
 DEVICE_SOLVERS = {
+    "auction": batched_auction,
     "jv": batched_jv,
 }
 
@@ -225,6 +226,9 @@ class Matcher(nn.Module):
         parallel_backend: Literal["thread", "process"] = "thread",
         n_jobs: int = 8,
         device_solver: str | None = None,
+        device_solver_eps: float = 1e-6,
+        device_solver_max_iters: int = 10_000,
+        device_solver_fallback: bool = True,
         verbose: bool = False,
     ):
         super().__init__()
@@ -249,11 +253,24 @@ class Matcher(nn.Module):
         device_solver : str | None
             If set, solve on whichever device the costs already live on instead of copying
             them to the host, which removes the device-to-host transfer and the host stall
-            that goes with it. Currently 'jv' (exact Jonker-Volgenant, needs the compiled
-            torch-linear-assignment extension; see hepattn.models.device_lap). Defaults to
-            None, i.e. the host solvers above. Worth turning on only when training is
+            that goes with it. One of 'jv' (exact Jonker-Volgenant, needs the compiled
+            torch-linear-assignment extension) or 'auction' (epsilon-optimal, pure torch, and
+            measured to be a poor fit for real cost matrices -- see the study notes). Defaults
+            to None, i.e. the host solvers above. Worth turning on only when training is
             host-bound: on a GPU that is already saturated the solver's own kernels cost more
             than the stall they remove.
+        device_solver_eps : float
+            Bidding increment for the auction solver, in units of each problem's cost range.
+            The assignment is within num_valid_targets * eps of optimal. Ignored by 'jv',
+            which is exact and has no tolerance to trade.
+        device_solver_max_iters : int
+            Cap on auction rounds before a problem is declared unsolved and handed to the host
+            solver. Guards against a degenerate cost matrix looping forever. Ignored by 'jv',
+            which is strongly polynomial and has no iteration cap to hit.
+        device_solver_fallback : bool
+            If true, problems the device solver does not converge on are re-solved with
+            default_solver on the host. If false, non-convergence raises. Only 'auction' can
+            fail to converge.
         verbose : bool
             If true, extra information on solver timing is printed.
         """
@@ -283,9 +300,13 @@ class Matcher(nn.Module):
         self.parallel_backend = parallel_backend
         self.n_jobs = n_jobs
         self.device_solver = device_solver
+        self.device_solver_eps = device_solver_eps
+        self.device_solver_max_iters = device_solver_max_iters
+        self.device_solver_fallback = device_solver_fallback
         self.step = 0
         self.verbose = verbose
         self._pinned_buffer = None
+        self.device_fallbacks = 0
 
     def _prepare_costs(self, costs, object_valid_mask=None, query_valid_mask=None):
         """Turn a [batch, num_pred, num_true] cost tensor into the host array the solvers want.
@@ -305,7 +326,7 @@ class Matcher(nn.Module):
         # sentinel used for invalid queries below: scipy treats inf as a forbidden
         # assignment and a huge finite cost identically, while lap1015 has undefined
         # behaviour on non-finite input.
-        big = float(np.finfo(np.float32).max / 10)
+        big = float(np.divide(np.finfo(np.float32).max, 10, dtype=np.float32))
         costs = torch.nan_to_num(costs, nan=big, posinf=big, neginf=-big)
 
         # If we have invalid/padded queries, set their costs to a high value
@@ -339,7 +360,8 @@ class Matcher(nn.Module):
         cached and grow-only, so allocation (expensive for pinned memory) happens rarely.
 
         Kept as its own method because it is the single transfer the device solver exists to
-        remove, which makes it the natural thing to put a timer around.
+        remove, which makes it the thing to put a timer around; see
+        :class:`hepattn.callbacks.MatcherTimer`.
         """
         n = costs_t.numel()
         if self._pinned_buffer is None or self._pinned_buffer.numel() < n:
@@ -359,6 +381,9 @@ class Matcher(nn.Module):
 
         Returns:
             [batch, num_pred] permutation tensor, on the costs' device.
+
+        Raises:
+            RuntimeError: If the solver does not converge and device_solver_fallback is False.
         """
         costs = costs.detach().to(torch.float32)
         batch, num_pred, num_true = costs.shape
@@ -374,10 +399,36 @@ class Matcher(nn.Module):
         col_allowed = None if query_valid_mask is None else query_valid_mask.detach().bool().to(costs.device)
         row_valid = torch.arange(max_len, device=costs.device)[None, :] < lengths[:, None]
 
-        # The solver is exact and cannot come back short, so there is nothing to check and no
-        # reason to stall the host on the result -- which is the point of the device path.
-        assigned = DEVICE_SOLVERS[self.device_solver](costs_t, row_valid, col_allowed)
-        return assignment_to_permutation(assigned, lengths, num_pred)
+        assigned, solved = DEVICE_SOLVERS[self.device_solver](
+            costs_t,
+            row_valid,
+            col_allowed,
+            eps_start=self.device_solver_eps,
+            eps_final=self.device_solver_eps,
+            max_iters=self.device_solver_max_iters,
+        )
+        pred_idxs = assignment_to_permutation(assigned, lengths, num_pred)
+
+        # A solver that reports None cannot come back short, so there is nothing to check and
+        # no reason to stall the host on the result -- which is the point of the device path.
+        # Otherwise non-convergence is expected to be rare, and this sync is the price of not
+        # having to trust the solver blindly. Falling back per event keeps the result exact.
+        if solved is None or bool(solved.all()):
+            return pred_idxs
+        if not self.device_solver_fallback:
+            raise RuntimeError(
+                f"The '{self.device_solver}' device solver failed to converge on "
+                f"{int((~solved).sum())}/{batch} problems within {self.device_solver_max_iters} iterations."
+            )
+
+        failed = (~solved).nonzero(as_tuple=True)[0]
+        self.device_fallbacks += int(failed.numel())
+        host_costs = costs_t[failed].cpu().numpy()
+        host_lengths = lengths[failed].cpu().numpy()
+        default_idx = np.arange(num_pred, dtype=np.int32)
+        repaired = [match_individual(SOLVERS[self.solver], host_costs[k][: host_lengths[k]], default_idx) for k in range(len(failed))]
+        pred_idxs[failed] = torch.from_numpy(np.stack(repaired)).to(device=pred_idxs.device, dtype=pred_idxs.dtype)
+        return pred_idxs
 
     def _solve(self, costs_t: np.ndarray, lengths_np: np.ndarray, pred_dim: int) -> torch.Tensor:
         """Run the LAP solver over a prepared [batch, max_true, num_pred] host array."""

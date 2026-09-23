@@ -40,7 +40,6 @@ class CLICDataset(Dataset):
         remove_wrong_idxs: bool = True,
         incidence_cutval: float = 1e-4,
         is_inference: bool = False,
-        dummy_data: bool = False,
     ):
         super().__init__()
 
@@ -58,7 +57,7 @@ class CLICDataset(Dataset):
 
         # input stuff
         self.filepath = filepath
-        self.dummy_data = dummy_data
+        assert is_valid_file(filepath), f"Invalid file: {filepath}"
 
         # other properties
         self.inputs = inputs
@@ -69,12 +68,6 @@ class CLICDataset(Dataset):
         self.incidence_cutval = incidence_cutval
         self.is_inference = is_inference
 
-        if dummy_data:
-            print(f"Creating CLIC dataset with dummy data and {num_events} samples")
-            self.num_events = num_events if num_events > 0 else 1000
-            return
-
-        assert is_valid_file(filepath), f"Invalid file: {filepath}"
         print(f"Loading CLIC dataset from {filepath} with {num_events} samples")
         print(f"Is inference: {self.is_inference}")
 
@@ -237,8 +230,8 @@ class CLICDataset(Dataset):
                 ],
                 -1,
             ),
-            "cosphi": torch.cat([track_cosphi, topo_phi], -1),
-            "sinphi": torch.cat([track_sinphi, topo_phi], -1),
+            "cosphi": torch.cat([track_cosphi, topo_cosphi], -1),
+            "sinphi": torch.cat([track_sinphi, topo_sinphi], -1),
             # interaction features
             "eta_int": torch.cat(
                 [
@@ -421,10 +414,10 @@ class CLICDataset(Dataset):
             val = do_padding(val, self.num_objects)
             particle_data[key] = val
 
-        has_track = torch.zeros(self.num_objects, dtype=torch.bool)
+        has_track = torch.zeros(self.num_objects, dtype=bool)
         has_track[:n_particles] = ~trackless_particle_mask
 
-        node_q_mask = torch.zeros(self.max_nodes, dtype=torch.bool)
+        node_q_mask = torch.zeros(self.max_nodes, dtype=bool)
         node_q_mask[:n_nodes] = True
 
         incidence_matrix = np.zeros((self.num_objects, n_nodes))
@@ -472,60 +465,8 @@ class CLICDataset(Dataset):
             "node_q_mask": node_q_mask,
         }
 
-    def _generate_dummy_data(self, idx):
-        """Generate dummy data with the same structure as real data."""
-        torch.manual_seed(idx + self.sampling_seed)  # Ensure reproducible dummy data
-
-        # Generate random numbers of nodes and particles (within reasonable bounds)
-        n_nodes = torch.randint(50, self.max_nodes, (1,)).item()
-        n_particles = torch.randint(10, self.num_objects, (1,)).item()
-
-        # Create dummy inputs
-        inputs = {
-            "node_features": torch.randn(self.max_nodes, 27),
-            "node_valid": torch.zeros(self.max_nodes, dtype=torch.bool),
-            "node_e": torch.zeros(self.max_nodes, dtype=torch.float32),
-            "node_pt": torch.zeros(self.max_nodes, dtype=torch.float32),
-            "node_eta": torch.randn(self.max_nodes),
-            "node_phi": torch.randn(self.max_nodes),
-            "node_sinphi": torch.randn(self.max_nodes),
-            "node_cosphi": torch.randn(self.max_nodes),
-            "node_is_track": torch.zeros(self.max_nodes, dtype=torch.float32),
-        }
-
-        # Set valid nodes
-        inputs["node_valid"][:n_nodes] = True
-        inputs["node_e"][:n_nodes] = torch.rand(n_nodes) * 100  # Random energies
-        inputs["node_pt"][:n_nodes] = torch.rand(n_nodes) * 50  # Random pt
-        inputs["node_is_track"][: n_nodes // 2] = 1.0  # Half are tracks
-
-        # Create dummy labels
-        labels = {
-            "particle_class": torch.randint(0, 5, (self.num_objects,), dtype=torch.long),
-            "particle_valid": torch.zeros(self.num_objects, dtype=torch.bool),
-            "node_valid": inputs["node_valid"].clone(),
-            "particle_node_valid": torch.rand(self.num_objects, self.max_nodes) > 0.8,
-            "particle_incidence": torch.rand(self.num_objects, self.max_nodes),
-            "event_number": torch.tensor(idx, dtype=torch.int64),
-        }
-
-        # Set valid particles
-        labels["particle_valid"][:n_particles] = True
-        labels["particle_class"][n_particles:] = 5  # Invalid particles are class 5
-
-        # Add regression targets if specified
-        if hasattr(self, "targets") and "particle" in self.targets:
-            for label in self.targets["particle"]:
-                tgt = torch.full((self.num_objects,), torch.nan)
-                tgt[:n_particles] = torch.randn(n_particles)  # Random regression targets
-                labels[f"particle_{label}"] = tgt
-
-        return inputs, labels
-
     def __getitem__(self, idx):
-        if self.dummy_data:
-            return self._generate_dummy_data(idx)
-
+        """Use .unsqueeze(0) to add in the dummy batch dimension (length 1 always)."""
         inputs = {}
         labels = {}
 

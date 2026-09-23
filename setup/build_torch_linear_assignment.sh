@@ -13,10 +13,12 @@
 #   pixi run [-e <env>] bash setup/build_torch_linear_assignment.sh [<target dir>]
 #
 # Environment:
-#   TORCH_CUDA_ARCH_LIST  compute capabilities to compile for; default "8.9;10.0" (L4 and B200).
+#   TLA_CUDA_ARCHS        compute capabilities to compile for; default "8.9;10.0" (L4 and B200).
 #                         Set it explicitly for other hardware: the build host has no GPU to
 #                         detect, and a binary without the right cubin dies at first launch with
-#                         "no kernel image is available for execution on the device".
+#                         "no kernel image is available for execution on the device". It always
+#                         replaces TORCH_CUDA_ARCH_LIST: the pixi environment exports a list of
+#                         its own ("5.0;...;10.0;10.1;12.0+PTX") whose 10.1 torch 2.9 rejects.
 #   CUDA_HOME             nvcc location; defaults to the active environment, which ships CUDA.
 #                         Do not point it at a system module the environment cannot see.
 #   MAX_JOBS              parallel nvcc jobs, default 4.
@@ -41,7 +43,7 @@ UPSTREAM=https://github.com/ivan-chai/torch-linear-assignment.git
 COMMIT=9c842e34f29d55c80f4529bf62f520eed1048442 # v0.0.6
 
 export FORCE_CUDA=1
-export TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-"8.9;10.0"}
+export TORCH_CUDA_ARCH_LIST=${TLA_CUDA_ARCHS:-"8.9;10.0"}
 export CUDA_HOME=${CUDA_HOME:-${CONDA_PREFIX:?run this inside the pixi environment, e.g. via pixi run}}
 export MAX_JOBS=${MAX_JOBS:-4}
 

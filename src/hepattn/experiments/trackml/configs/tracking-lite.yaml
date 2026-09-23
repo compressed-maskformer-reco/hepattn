@@ -78,10 +78,11 @@ trainer:
   #    dirpath: ./profile_logs/
   #    filename: profile.json
 
+  # Specify loggers here
   logger:
-    class_path: hepattn.utils.loggers.MyCometLogger
+    class_path: lightning.pytorch.loggers.CometLogger
     init_args:
-      project: trackml_tracking
+      project_name: trackml_tracking
 
   callbacks:
     #- class_path: hepattn.callbacks.TargetStats
@@ -122,7 +123,7 @@ model:
     class_path: hepattn.models.MaskFormer
     init_args:
       dim: &dim 256
-      encoder_input_sort_field: phi
+      input_sort_field: phi
       input_nets:
         class_path: torch.nn.ModuleList
         init_args:
@@ -188,7 +189,7 @@ model:
         class_path: torch.nn.ModuleList
         init_args:
           modules:
-            - class_path: hepattn.models.task.ObjectClassificationTask
+            - class_path: hepattn.models.task.ObjectValidTask
               init_args:
                 name: track_valid
                 input_object: query
@@ -203,7 +204,7 @@ model:
             - class_path: hepattn.models.task.ObjectHitMaskTask
               init_args:
                 name: track_hit_valid
-                input_constituent: hit
+                input_hit: hit
                 input_object: query
                 output_object: track
                 target_object: particle

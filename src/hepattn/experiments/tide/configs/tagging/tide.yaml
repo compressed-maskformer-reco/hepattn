@@ -211,7 +211,7 @@ model:
         class_path: torch.nn.ModuleList
         init_args:
           modules:
-            - class_path: hepattn.models.task.ObjectClassificationTask
+            - class_path: hepattn.models.task.ObjectValidTask
               init_args:
                 name: pred_valid
                 input_object: query
@@ -228,7 +228,7 @@ model:
             - class_path: hepattn.models.task.ObjectHitMaskTask
               init_args:
                 name: pred_pix_assignment
-                input_constituent: pix
+                input_hit: pix
                 input_object: query
                 output_object: pred
                 target_object: sudo
@@ -242,7 +242,7 @@ model:
             - class_path: hepattn.models.task.ObjectHitMaskTask
               init_args:
                 name: pred_sct_assignment
-                input_constituent: sct
+                input_hit: sct
                 input_object: query
                 output_object: pred
                 target_object: sudo

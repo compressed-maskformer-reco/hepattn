@@ -3,11 +3,7 @@ import torch
 from torch import Tensor, nn
 
 from hepattn.models import DropPath, Encoder, EncoderLayer, LayerScale, Residual
-from hepattn.models.encoder import change_attn_backends
-
-HAS_GPU = torch.cuda.is_available()
-ATTN_TYPES_GPU = {"flex", "flash", "flash-varlen"}
-DEVICE = "cuda" if HAS_GPU else "cpu"
+from hepattn.models.transformer import change_attn_backends
 
 
 # Fixtures for common inputs
@@ -153,12 +149,11 @@ def test_register_tokens_with_varlen():
         ("torch", "flash-varlen"),
     ],
 )
+@pytest.mark.gpu
 def test_encoder_change_backends(attn_type, attn_type_new):
-    if not HAS_GPU and (attn_type in ATTN_TYPES_GPU or attn_type_new in ATTN_TYPES_GPU):
-        pytest.skip("Skipping GPU-specific test on CPU-only environment")
-    model = Encoder(num_layers=3, dim=128, attn_type=attn_type).to(DEVICE).half()
-    x_a = x_b = torch.randn(8, 128, 128, device=DEVICE).half()
-    kv_mask = torch.full((8, x_a.shape[-2]), True, dtype=torch.bool, device=DEVICE)
+    model = Encoder(num_layers=3, dim=128, attn_type=attn_type).cuda().half()
+    x_a = x_b = torch.randn(8, 128, 128, device="cuda").half()
+    kv_mask = torch.full((8, x_a.shape[-2]), True, dtype=torch.bool, device="cuda")
 
     with torch.no_grad():
         out = model(x_a, kv_mask=kv_mask if attn_type == "flash-varlen" else None)
@@ -169,3 +164,40 @@ def test_encoder_change_backends(attn_type, attn_type_new):
 
     # We allow this tolerance because of fp16 precision issues
     torch.testing.assert_close(out, out_new, atol=5e-3, rtol=5e-3)
+
+
+def test_encoder_sorting_keeps_padding_out_of_the_sequence():
+    """Sorting the tokens must not let padded slots displace real ones.
+
+    ``x_sort_value`` is taken from an input field (phi, for CLIC), and a padded slot carries
+    whatever that field pads to -- zero, which falls in the middle of a phi ordering. The
+    padded slots therefore have to be pushed to the end, and the mask has to follow the same
+    permutation, or the encoder attends to padding and masks out real tokens.
+    """
+    torch.manual_seed(42)
+    batch_size, seq_len, dim, num_valid = 2, 16, 32, 10
+
+    model = Encoder(num_layers=2, dim=dim, attn_kwargs={"attn_type": "torch"})
+    model.eval()
+
+    x = torch.rand(batch_size, seq_len, dim)
+    kv_mask = torch.zeros(batch_size, seq_len, dtype=torch.bool)
+    kv_mask[:, :num_valid] = True
+
+    # A phi-like sort value in [-pi, pi] for the real tokens, zero for the padded ones
+    sort_value = torch.zeros(batch_size, seq_len)
+    sort_value[:, :num_valid] = torch.empty(batch_size, num_valid).uniform_(-torch.pi, torch.pi)
+
+    with torch.no_grad():
+        sorted_out = model(x, x_sort_value=sort_value, kv_mask=kv_mask)
+        unsorted_out = model(x, kv_mask=kv_mask)
+
+        # Padded slots must not influence the real ones, whatever garbage they hold
+        x_garbage = x.clone()
+        x_garbage[:, num_valid:] = 1e3
+        garbage_out = model(x_garbage, x_sort_value=sort_value, kv_mask=kv_mask)
+
+    # The encoder undoes the sort, so the real tokens come back in their original positions,
+    # and attention is permutation equivariant: sorting must not change their values
+    torch.testing.assert_close(sorted_out[kv_mask], unsorted_out[kv_mask], atol=1e-5, rtol=1e-4)
+    torch.testing.assert_close(sorted_out[kv_mask], garbage_out[kv_mask], atol=1e-5, rtol=1e-4)

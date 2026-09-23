@@ -7,6 +7,7 @@ import torch
 from hepattn.experiments.trackml.data import TrackMLDataset
 from hepattn.experiments.trackml.eval.plot_event import plot_trackml_event_reconstruction
 from hepattn.experiments.trackml.prep import preprocess
+from hepattn.models.matcher import Matcher
 
 plt.rcParams["figure.dpi"] = 300
 
@@ -37,7 +38,6 @@ class TestTrackMLEvent:
 
         target_fields = {
             "particle": ["pt", "eta", "phi"],
-            "hit": ["on_valid_particle"],
         }
 
         dirpath = "data/trackml/prepped/"
@@ -84,3 +84,9 @@ class TestTrackMLEvent:
         output_dir.mkdir(exist_ok=True, parents=True)
         fig = plot_trackml_event_reconstruction(inputs, targets)
         fig.savefig(output_dir / "trackml_event.png")
+
+    def test_trackml_matcher(self):
+        Matcher(
+            default_solver="scipy",
+            adaptive_solver=False,
+        )

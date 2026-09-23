@@ -113,10 +113,13 @@ trainer:
   enable_progress_bar: True
   val_check_interval: 1000
 
+  # Specify loggers here
   logger:
-    class_path: hepattn.utils.loggers.MyCometLogger
+    class_path: lightning.pytorch.loggers.CometLogger
     init_args:
-      project: pixel
+      project_name: pixel
+      # We are not using conda and log manually anyway
+      log_env_details: false
 
   # Specify any callback here
   callbacks:
@@ -214,7 +217,7 @@ model:
         class_path: torch.nn.ModuleList
         init_args:
           modules:
-            - class_path: hepattn.models.task.ObjectClassificationTask
+            - class_path: hepattn.models.task.ObjectValidTask
               init_args:
                 name: track_valid
                 input_object: query

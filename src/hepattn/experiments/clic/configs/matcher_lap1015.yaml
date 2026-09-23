@@ -1,0 +1,10 @@
+# Solve the Hungarian matching on the host with the lap1015 extension (late-augmentation variant),
+# threaded over the batch. Requires the GIL-releasing lap1015 build from this repository
+# (`python -c "import lap1015; print(lap1015.releases_gil)"` must print True, see README.md).
+# Layer AFTER the model config:  --config <model>.yaml --config configs/matcher_lap1015.yaml
+model:
+  model:
+    init_args:
+      matcher:
+        init_args:
+          default_solver: lap1015_late
