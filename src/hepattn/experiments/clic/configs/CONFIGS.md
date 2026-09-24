@@ -12,7 +12,7 @@ config sets `name: clic_v<N>`, which becomes the prefix of its output folder und
 | `clic_v7.yaml` | **v7** — small model (`name: clic_v7`). |
 | `clic_v6_fp32.yaml` | **v6 fp32** — full-precision variant of `base.yaml` for the precision study (`name: clic_v6_fp32`): `precision 32-true`, encoder `attn_type torch`, `matmul_precision highest`, `batch_size 128`. Everything else identical to v6. See `../studies/glow_jet_iqr/03_precision/`. |
 | `clic_var_transform.yaml` | Input/target scaling dictionary (referenced by both via `scale_dict_path`). |
-| `eval.yaml`, `test_override.yaml` | Evaluation / test-time overrides, not training. |
+| `eval.yaml` | Evaluation-time overlay, not training. |
 
 ## v6 vs v7
 

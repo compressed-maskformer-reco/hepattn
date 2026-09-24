@@ -26,14 +26,14 @@ ATTN_TYPES = {
     "flex": flex_attention,
     "flash": flash_attn_func,
     "flash-varlen": flash_attn_varlen_func,
-    "linformer": lambda q, k, v, **kwargs: None,
+    "linformer": None,  # a module with its own projections, built per layer in set_backend
 }
 
 # Which attentiom types support varlen / kv padding
 VARLEN_ATTN_TYPES = ["torch", "flash-varlen", "linformer"]
 
 # Which attention types support attention masking
-ATTN_MASK_ATTN_TYPES = ["torch", "flex", "linformer"]
+ATTN_MASK_ATTN_TYPES = ["torch", "flex"]  # linformer mixes keys along the sequence axis: no per-query mask
 
 # Which attention types support attention biasing
 ATTN_BIAS_ATTN_TYPES = ["torch"]
@@ -203,6 +203,11 @@ class Attention(nn.Module):
             self.in_proj_bias = nn.Parameter(torch.empty(3 * dim)) if bias else None
             self.out_proj = nn.Linear(dim, dim, bias=bias)
 
+        if attn_type == "linformer" and value_residual:
+            # The Linformer path skips _prepare_qkv, where the value residual is mixed in; allowing
+            # it would leave value_residual_mix untrained and abort DDP on unused parameters.
+            raise ValueError("value_residual is not supported with attn_type='linformer'; set value_residual: false on that encoder")
+
         if self.value_residual and not self.is_first_layer:
             self.value_residual_mix = nn.Sequential(nn.Linear(dim, num_heads), nn.Sigmoid())
 
@@ -221,7 +226,9 @@ class Attention(nn.Module):
             raise ValueError("window_size not set correctly")
 
     def reset_parameters(self):
-        """Initialize the parameters."""
+        """Initialize the parameters (the Linformer backend initialises its own)."""
+        if self.attn_type == "linformer":
+            return
         nn.init.xavier_uniform_(self.in_proj_weight)
         if self.bias:
             nn.init.constant_(self.in_proj_bias, 0.0)
@@ -230,13 +237,19 @@ class Attention(nn.Module):
     def set_backend(self, attn_type: str, torch_compile: bool = False, window_size: int | None = None) -> str:
         # Allow to change the attention backend after initialization, when evaluating the model
 
-        self.attn_type = attn_type
         if attn_type not in ATTN_TYPES:
             raise ValueError(f"Invalid attention type: {attn_type}")
+        # Linformer owns its projections, so it cannot be swapped with the packed-projection
+        # backends after construction (their parameters differ).
+        if hasattr(self, "attn") and (attn_type == "linformer") != (self.attn_type == "linformer"):
+            raise ValueError("Cannot switch between the linformer backend and the others: their parameters differ")
+        self.attn_type = attn_type
         if attn_type == "linformer":
-            self.attn = LinformerAttention(
-                self.dim, seq_len=self.linformer_seq_len, k=self.linformer_proj_dim, heads=self.num_heads, dim_head=self.head_dim
-            )
+            # Built once; a later set_backend("linformer") (e.g. at evaluation) keeps the trained weights.
+            if not isinstance(getattr(self, "attn", None), LinformerAttention):
+                self.attn = LinformerAttention(
+                    self.dim, seq_len=self.linformer_seq_len, k=self.linformer_proj_dim, heads=self.num_heads, dim_head=self.head_dim
+                )
         else:
             self.attn = ATTN_TYPES[attn_type]
 
@@ -437,8 +450,8 @@ class Attention(nn.Module):
             # column before any score-space mask can act. It has to be zeroed pre-projection,
             # which LinformerAttention does itself.
             qkv_norms = (self.q_norm, self.k_norm, self.v_norm) if self.qkv_norm else None
-            out = self.attn(q, k, v, attn_mask=attn_mask, kv_mask=kv_mask, qkv_norms=qkv_norms)
-            return out  # linformer returns model-dim output; no head recombine / out_proj
+            # linformer returns model-dim output; no head recombine / out_proj
+            return self.attn(q, k, v, attn_mask=attn_mask, kv_mask=kv_mask, qkv_norms=qkv_norms)
         else:
             raise ValueError(f"Invalid attention type: {self.attn_type}")
 

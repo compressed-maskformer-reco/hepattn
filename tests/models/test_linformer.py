@@ -52,29 +52,14 @@ def test_output_depends_on_the_projection_matrix():
     assert not torch.allclose(before, after), "output ignores proj_k -- projection is not wired in"
 
 
-@pytest.mark.parametrize("k", [N // 2, N - 1])
-def test_masked_path_requires_k_at_least_seq_len(k):
-    """k < kv_len raises on the masked path -- the documented reason CLIC must use k > n."""
-    m = make(k=k, seq_len=4 * N)
-    x = torch.randn(2, N, DIM)
-    mask = torch.ones(2, N, N)
-    assert torch.isfinite(m(x, x, x)).all(), "unmasked path should still work for k < n"
-    with pytest.raises(RuntimeError):
-        m(x, x, x, attn_mask=mask)
-
-
-def test_fully_masked_row_is_finite_and_attends_to_nothing():
-    """A query masked against every key must give finite output, not NaN."""
+def test_attn_mask_is_refused_not_misapplied():
+    """A per-query mask cannot be applied after keys are mixed along the sequence axis; the
+    module must refuse it rather than mask projected columns as if they were hits.
+    """
     m = make(k=N)
     x = torch.randn(2, N, DIM)
-    mask = torch.ones(2, N, N)
-    mask[0, 3, :] = 0  # query 3 of batch 0 attends to nothing
-
-    out = m(x, x, x, attn_mask=mask)
-    assert torch.isfinite(out).all(), "fully-masked row produced NaN/Inf (softmax over all -inf)"
-
-    # The row must be the bias alone: attention output is zero, so only to_out's bias survives.
-    assert torch.allclose(out[0, 3], m.to_out.bias, atol=1e-6), "fully-masked row did not attend to nothing"
+    with pytest.raises(ValueError, match="attn_mask"):
+        m(x, x, x, attn_mask=torch.ones(2, N, N, dtype=torch.bool))
 
 
 def test_wired_through_the_attention_layer_without_stray_parameters():

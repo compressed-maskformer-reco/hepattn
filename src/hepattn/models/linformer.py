@@ -1,139 +1,116 @@
+"""Linformer attention (Wang et al., arXiv:2006.04768) in the shape hepattn's Attention expects.
+
+Trivial rewriting of https://github.com/lucidrains/linformer. Two things matter here and are
+easy to get wrong:
+
+* Keys and values are projected ALONG THE SEQUENCE AXIS (``E[n, k]``), so every projected
+  column is a mixture of every original position. Padding therefore has to be removed
+  BEFORE the projection (a score-space mask cannot undo the blend afterwards), and a
+  per-query ``attn_mask`` cannot be honoured at all: there is no projected column that
+  "is" hit j. This module zeroes padded rows pre-projection and refuses ``attn_mask``.
+* The q/k/v norms that hepattn's ``Attention`` owns (``hybrid_norm``) have to be applied on
+  this path too, and BEFORE the zeroing: a LayerNorm with a bias maps a zero row to the
+  bias, which would leak into the projection.
+"""
+
 import math
 
 import torch
-from torch import nn
-
-# this is a trivial rewriting of https://github.com/lucidrains/linformer
-# into a form that better fits the hepattn decoder setup
+from torch import Tensor, nn
 
 
-def default(val, default_val):
-    return val if val is not None else default_val
-
-
-def init_(tensor):
-    dim = tensor.shape[-1]
-    std = 1 / math.sqrt(dim)
+def _init_projection(tensor: Tensor) -> Tensor:
+    std = 1 / math.sqrt(tensor.shape[-1])
     tensor.uniform_(-std, std)
     return tensor
 
 
 class LinformerAttention(nn.Module):
-    def __init__(self, dim, seq_len, k=256, heads=8, dim_head=None, one_kv_head=False, share_kv=False, dropout=0.0):
-        super().__init__()
-        assert (dim % heads) == 0, "dimension must be divisible by the number of heads"
+    def __init__(self, dim: int, seq_len: int, k: int = 256, heads: int = 8, dim_head: int | None = None, dropout: float = 0.0) -> None:
+        """Linformer self/cross attention with a learned sequence-axis projection.
 
+        Args:
+            dim: model dimension.
+            seq_len: maximum key/value sequence length; the projection has this many rows and
+                is sliced for shorter inputs.
+            k: projected (compressed) sequence length.
+            heads: number of attention heads.
+            dim_head: per-head dimension; ``dim // heads`` if None.
+            dropout: dropout on the attention weights.
+        """
+        super().__init__()
+        assert dim % heads == 0, "dimension must be divisible by the number of heads"
         self.seq_len = seq_len
         self.k = k
-
         self.heads = heads
+        self.dim_head = dim_head if dim_head is not None else dim // heads
 
-        dim_head = default(dim_head, dim // heads)
-        self.dim_head = dim_head
-
-        self.to_q = nn.Linear(dim, dim_head * heads, bias=False)
-
-        kv_dim = dim_head if one_kv_head else (dim_head * heads)
-        self.to_k = nn.Linear(dim, kv_dim, bias=False)
-        self.proj_k = nn.Parameter(init_(torch.zeros(seq_len, k)))
-
-        self.share_kv = share_kv
-        if not share_kv:
-            self.to_v = nn.Linear(dim, kv_dim, bias=False)
-            self.proj_v = nn.Parameter(init_(torch.zeros(seq_len, k)))
-
+        inner = self.dim_head * heads
+        self.to_q = nn.Linear(dim, inner, bias=False)
+        self.to_k = nn.Linear(dim, inner, bias=False)
+        self.to_v = nn.Linear(dim, inner, bias=False)
+        self.proj_k = nn.Parameter(_init_projection(torch.zeros(seq_len, k)))
+        self.proj_v = nn.Parameter(_init_projection(torch.zeros(seq_len, k)))
         self.dropout = nn.Dropout(dropout)
-        self.to_out = nn.Linear(dim_head * heads, dim)
+        self.to_out = nn.Linear(inner, dim)
 
-    def forward(self, q, k=None, v=None, attn_mask=None, kv_mask=None, qkv_norms=None, **kwargs):
-        # print("q.shape", q.shape)
-        b, n, d, d_h, h, k_num = *q.shape, self.dim_head, self.heads, self.k
+    def forward(
+        self,
+        q: Tensor,
+        k: Tensor | None = None,
+        v: Tensor | None = None,
+        attn_mask: Tensor | None = None,
+        kv_mask: Tensor | None = None,
+        qkv_norms: tuple[nn.Module, nn.Module, nn.Module] | None = None,
+        **_ignored,
+    ) -> Tensor:
+        """Attend from ``q`` (B, N, D) to ``k``/``v`` (B, M, D); self-attention when both are None.
 
-        kv_len = n if k is None else k.shape[1]
-        if k is not None:
-            assert v is not None, "v should not be None if k_input is not None"
-        assert k.shape[1] == v.shape[1], f"{k.shape[1]} ?= {v.shape[1]}"
-        assert kv_len <= self.seq_len, f"the sequence length of the key / values must be {self.seq_len} - {kv_len} given"
+        ``kv_mask`` (B, M) is True for real key/value slots; padded slots are zeroed before the
+        sequence projection so they contribute exactly nothing. ``qkv_norms`` are Attention's
+        q/k/v norm modules, applied here to the projected q/k/v before that zeroing.
+        ``attn_mask`` is rejected: see the module docstring.
+
+        Raises:
+            ValueError: if ``attn_mask`` is given, or if only one of ``k``/``v`` is given.
+        """
+        if attn_mask is not None:
+            raise ValueError("LinformerAttention cannot apply a per-query attn_mask: keys are mixed along the sequence axis before scoring")
+        if (k is None) != (v is None):
+            raise ValueError("pass both k and v, or neither (self-attention)")
+        if k is None:
+            k, v = q, q
+        assert v is not None
+        b, n, _ = q.shape
+        kv_len = k.shape[1]
+        assert kv_len <= self.seq_len, f"key/value length {kv_len} exceeds seq_len {self.seq_len}"
 
         queries = self.to_q(q)
+        keys = self.to_k(k)
+        values = self.to_v(v)
 
-        proj_seq_len = lambda args: torch.einsum("bnd,nk->bkd", *args)
-
-        keys = self.to_k(k) if k is not None else self.to_k(q)
-        values = self.to_v(v) if v is not None else self.to_v(q)
-
-        # qkv-norm. to_q/to_k/to_v play the role in_proj plays in the standard path, so the
-        # norms belong here -- and BEFORE the padding is zeroed, since LayerNorm of a zero
-        # row is not zero. The modules stay owned by Attention so state_dict keys are
-        # unchanged; without this they receive no gradient at all.
         if qkv_norms is not None:
             q_norm, k_norm, v_norm = qkv_norms
             queries = q_norm(queries)
             keys = k_norm(keys)
             values = v_norm(values)
 
-        # Padded positions must be removed BEFORE the sequence projection: each projected
-        # column is a mixture of every original position, so masking afterwards cannot undo
-        # their contribution. to_k/to_v are bias-free, so zeroing the rows here is exactly
-        # equivalent to those positions not existing.
         if kv_mask is not None:
             keep = kv_mask[..., None].to(keys.dtype)
             keys = keys * keep
             values = values * keep
 
-        kv_projs = (self.proj_k, self.proj_v if not self.share_kv else self.proj_k)
+        # Project along the sequence axis: (B, M, inner) -> (B, k, inner). Slice the projection
+        # to the actual length so shorter sequences use the leading rows.
+        keys = torch.einsum("bnd,nk->bkd", keys, self.proj_k[:kv_len])
+        values = torch.einsum("bnd,nk->bkd", values, self.proj_v[:kv_len])
 
-        # allow for variable sequence lengths (less than maximum sequence length) by slicing projections
-        if kv_len < self.seq_len:
-            kv_projs = map(lambda t: t[:kv_len], kv_projs)
+        h, d_h, k_num = self.heads, self.dim_head, self.k
+        queries = queries.reshape(b, n, h, d_h).transpose(1, 2)
+        keys = keys.reshape(b, k_num, h, d_h).transpose(1, 2)
+        values = values.reshape(b, k_num, h, d_h).transpose(1, 2)
 
-        # project keys and values along the sequence length dimension to k
-        keys, values = map(proj_seq_len, zip((keys, values), kv_projs, strict=False))
-
-        # merge head into batch for queries and key / values
-        queries = queries.reshape(b, n, h, -1).transpose(1, 2)
-
-        merge_key_values = lambda t: t.reshape(b, k_num, -1, d_h).transpose(1, 2).expand(-1, h, -1, -1)
-        keys, values = map(merge_key_values, (keys, values))
-
-        # attention
-        dots = torch.einsum("bhnd,bhkd->bhnk", queries, keys) * (d_h**-0.5)
-        if attn_mask is not None:
-            # Build mask in projected dots space.
-            mask = torch.zeros_like(dots, dtype=torch.bool)
-
-            original_mask = (attn_mask == 0)[:, None, ...]
-            mask[..., :kv_len] = original_mask
-            mask[..., kv_len:] = True
-
-            # Rows where every position is masked.
-            fully_masked = mask.all(dim=-1, keepdim=True)
-
-            # Apply normal -inf masking.
-            dots = dots.masked_fill(mask, float("-inf"))
-
-            # Avoid softmax([-inf, -inf, ...]) = NaN.
-            dots_for_softmax = torch.where(
-                fully_masked,
-                torch.zeros_like(dots),
-                dots,
-            )
-
-            attn = dots_for_softmax.softmax(dim=-1)
-
-            # Fully masked rows should attend to nothing.
-            attn = torch.where(
-                fully_masked,
-                torch.zeros_like(attn),
-                attn,
-            )
-        else:
-            attn = dots.softmax(dim=-1)
-
-        attn = self.dropout(attn)
-
+        scores = torch.einsum("bhnd,bhkd->bhnk", queries, keys) * (d_h**-0.5)
+        attn = self.dropout(scores.softmax(dim=-1))
         out = torch.einsum("bhnk,bhkd->bhnd", attn, values)
-
-        # split heads
-        out = out.transpose(1, 2).reshape(b, n, -1)
-        return self.to_out(out)
+        return self.to_out(out.transpose(1, 2).reshape(b, n, -1))

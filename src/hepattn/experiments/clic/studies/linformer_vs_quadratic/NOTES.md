@@ -355,3 +355,39 @@ hypothesis (2026-09-15) that the poster's poor physics came from the non-functio
 decoder mask under Linformer rather than from Linformer per se. Helen's encoder-only
 k=32 arm (decoder quadratic, mask attention genuinely active) is the decomposition test:
 if it lands near the quadratic arm, the decoder mask was the whole story.
+
+## 6. Review of org PR #2, and what changed in response (2026-09-23/24)
+
+Lindsey's adversarial review of PR #2 (head `09c69e7`) confirmed sec. 3b independently: the
+Linformer `attn_mask` path masked projected columns as if they were hits, so masked hits still
+reached the query and surplus columns were dropped for every query. His probe: query-0 output
+moved by 1.5e-01 when only its masked hits changed (0 for torch attention). Response:
+
+- `LinformerAttention` now **refuses `attn_mask`** and `linformer` is out of
+  `ATTN_MASK_ATTN_TYPES`; the dead projected-space mask block is gone. Consequence for configs:
+  every Linformer arm keeps a **quadratic decoder** (`linformer_polaris.yaml`,
+  `linformer_sortphi_polaris.yaml`, `linformer.yaml`). The k=256 both-encoder-and-decoder arm
+  that produced 4.515 is no longer expressible, which is the right outcome.
+- `value_residual` with `attn_type: linformer` now raises (it lives in `_prepare_qkv`, which the
+  Linformer path skips; allowing it left 20,560 untrained parameters and aborted plain DDP).
+  `linformer.yaml` sets it off. `quadratic_novr_polaris.yaml` is a control without it, so
+  quadratic-vs-Linformer can vary attention alone; `quadratic_polaris.yaml` keeps the paper's
+  `value_residual: true`.
+- `set_backend("linformer")` keeps the trained weights; switching Linformer <-> other backends
+  raises; `reset_parameters` is a no-op for Linformer; `k=None` works; `share_kv`/`one_kv_head`
+  removed (never reachable from `Attention`).
+- `tests/models/test_linformer_padding.py`: padded-vs-truncated equality without and with a
+  **biased** LayerNorm on k/v (the order guard Lindsey asked for), garbage-in-padding
+  invariance, norm gradients + no dead parameters, attn_mask refusal, set_backend contracts.
+- Not carried: the fork's `base.yaml` defaults (restored to `main`'s), `studies/glow_jet_iqr`
+  (62 of the 76 lint errors), the empty `test_override.yaml`.
+
+Context: Maria's PR #8 (supersedes #6) stays on head-line `main` and restores the `clic-paper`
+tag's *behaviour* for CLIC through three new options (`query_update_order`,
+`dense_norm_placement`, `self_attn_norm_kv`) plus config (SwiGLU, non-affine norms,
+classification at layer 0, mask `constituent_net`, incidence widths), verified to reproduce the
+tag's activations to 0.0. It keeps the double-softmax fix (#3) and has **no Linformer**, so this
+PR remains the Linformer path. A trial merge of #8 into this branch is conflict-free.
+
+Recipe for future arms: `main`'s `base.yaml` is the paper's (Lion 8e-5 / wd 1e-4); the Polaris
+configs here still set AdamW 1e-4 / wd 0.03 as run. Decide before the reruns; do not mix.

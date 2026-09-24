@@ -1,3 +1,7 @@
+# NOTE (review of org PR #2): the decoder is QUADRATIC here. A Linformer decoder cannot honour the
+# per-query mask that mask_attention needs (keys are mixed along the sequence axis), and the code
+# now refuses attn_mask on that path. The first Polaris arm (val/loss 4.515, epoch 199) ran with a
+# Linformer decoder whose mask was silently non-functional; see studies/linformer_vs_quadratic.
 name: clic_v6_linformer_sortphi
 seed_everything: 42
 
@@ -137,7 +141,6 @@ model:
           hybrid_norm: true
           attn_kwargs:
             num_heads: 16
-            attn_type: linformer
 
       matcher:
         class_path: hepattn.models.matcher.Matcher

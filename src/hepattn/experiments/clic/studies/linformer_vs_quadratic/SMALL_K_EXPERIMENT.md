@@ -95,9 +95,10 @@ run as a single change in k, and it is the configuration you would actually depl
 2. The CLIC ROOT files staged somewhere on `/eagle`. You need
    `train_clic_fix.root` and `val_clic_fix.root`. Roughly 12 GB. Ask Erdem or Akum for the
    path they use rather than re-downloading.
-3. A Python venv with the project dependencies. Erdem's lives at
-   `/eagle/<project>/hepattn-hgq/hepattn/.venv`. Reuse it if you have read access, since
-   building it is the slowest part of setup.
+3. A Python venv built from **this tree's own lock** (`uv python install 3.12.0 && uv sync
+   --no-install-project --python 3.12.0` in the clone), with `VENV_DIR` in `env.sh` pointed at
+   it. Do not reuse someone else's venv: it is only executable by its owner, and a venv built
+   from a different lock can carry a lightning whose logger arguments the configs do not match.
 4. This repo checked out on Polaris, on the branch described in section 4.
 
 **You do not need Erdem's checkpoints.** These are fresh runs from scratch.
@@ -185,6 +186,10 @@ If you see anything beyond that, stop and ask. A controlled comparison is the en
 ---
 
 ## 7. Step 3 — local smoke test, no GPU needed
+
+**On a Polaris login node** prefix the command with `CC=gcc CXX=g++`: inductor otherwise picks
+NVHPC's `nvc++` and fails with `nvc++-Error-Unknown switch: -fno-trapping-math`. The PBS scripts
+already export this; the login-node shell does not.
 
 Run this **before** touching the queue. It builds each arm from its YAML, does a real
 forward and backward on dummy data, and proves the projection is the right shape and gets
