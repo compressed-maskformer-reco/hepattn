@@ -22,16 +22,16 @@ data:
 
   num_objects: &num_particles 150
 
-  train_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/train_clic_fix.root
-  valid_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/val_clic_fix.root
-  test_path: /cmsuf/data/store/user/mmazza/hepattn_clic_data/test_clic_common_infer.root
+  train_path: /projects/u5ar/data/clic/train_clic_fix.root
+  valid_path: /projects/u5ar/data/clic/val_clic_fix.root
+  test_path: /projects/u5ar/data/clic/test_clic_common_infer.root
 
   num_workers: 16
   num_train: -1
   num_test: -1
   num_val: 5000
 
-  batch_size: 2048
+  batch_size: 512
   incidence_cutval: 0.01
 
   scale_dict_path: &scale_dict_path configs/clic_var_transform.yaml
@@ -39,7 +39,7 @@ data:
 trainer:
   max_epochs: 200
   accelerator: gpu
-  devices: 4
+  devices: 2
   precision: bf16-mixed
   gradient_clip_val: 0.1
   log_every_n_steps: 50
