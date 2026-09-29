@@ -144,7 +144,7 @@ def test_get_hybrid_norm_config_default_is_hybridnorm(depth, hybrid_norm):
 def test_get_hybrid_norm_config_unknown_placement():
     """Test that an unknown dense norm placement is rejected."""
     with pytest.raises(ValueError, match="dense_norm_placement"):
-        get_hybrid_norm_config(norm="LayerNorm", depth=0, hybrid_norm=True, qkv_norm=False, dense_norm_placement="post")
+        get_hybrid_norm_config(norm="LayerNorm", depth=0, hybrid_norm=True, qkv_norm=False, dense_norm_placement="post")  # ty: ignore[invalid-argument-type]
 
 
 def test_norms_with_different_dtypes():

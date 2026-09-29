@@ -636,7 +636,7 @@ class TestMaskFormerDecoderLayer:
     def test_query_update_order_unknown(self):
         """Test that an unknown query update order is rejected."""
         with pytest.raises(ValueError, match="query_update_order"):
-            MaskFormerDecoderLayer(dim=DIM, query_update_order="sa_ca_dense")
+            MaskFormerDecoderLayer(dim=DIM, query_update_order="sa_ca_dense")  # ty: ignore[invalid-argument-type]
 
     def test_self_attn_norm_kv(self, sample_data):
         """Test that self_attn_norm_kv takes the self-attention keys and values from the normalized queries."""
