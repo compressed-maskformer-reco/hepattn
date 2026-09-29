@@ -13,6 +13,7 @@ except ImportError:
         flash_attn_func = None  # ty: ignore [conflicting-declarations]
         flash_attn_varlen_func = None  # ty: ignore [conflicting-declarations]
 
+from masked_linformer import attend as linformer_attend
 from masked_linformer import init_ as linformer_init
 from masked_linformer import project as linformer_project
 from torch import Size, Tensor, nn
@@ -35,7 +36,7 @@ ATTN_TYPES = {
 VARLEN_ATTN_TYPES = ["torch", "flash-varlen", "linformer"]
 
 # Which attention types support attention masking
-ATTN_MASK_ATTN_TYPES = ["torch", "flex"]
+ATTN_MASK_ATTN_TYPES = ["torch", "flex", "linformer"]
 
 # Which attention types support attention biasing
 ATTN_BIAS_ATTN_TYPES = ["torch"]
@@ -313,6 +314,22 @@ class Attention(nn.Module):
         out = self.attn(q_flat, k_flat, v_flat, cu_seqlens, cu_seqlens, max_seqlen, max_seqlen, window_size=self.window_size)
         return out.view(q.shape[0], -1, self.dim)
 
+    def _linformer_attention(
+        self, q: Tensor, k: Tensor, v: Tensor, kv_mask: Tensor | None, attn_mask: Tensor | None, kv_sort_idx: Tensor | None
+    ) -> Tensor:
+        # The projections index key slots, so keys enter in kv_sort_idx order; the queries keep theirs
+        if kv_sort_idx is not None:
+            k, v = (t.gather(-2, kv_sort_idx[:, None, :, None].expand_as(t)) for t in (k, v))
+            kv_mask = None if kv_mask is None else kv_mask.gather(-1, kv_sort_idx)
+            attn_mask = None if attn_mask is None else attn_mask.gather(-1, kv_sort_idx[:, None].expand_as(attn_mask))
+        if attn_mask is None:
+            k = linformer_project(k, self.proj_k, kv_mask)
+            v = linformer_project(v, self.proj_v, kv_mask)
+            return self.attn(q, k, v)
+        if kv_mask is not None:
+            attn_mask = attn_mask & kv_mask[:, None]
+        return linformer_attend(q, k, v, self.proj_k, self.proj_v, attn_mask)
+
     def forward(
         self,
         q: Tensor,
@@ -358,6 +375,7 @@ class Attention(nn.Module):
         **kwargs : dict
             Additional keyword arguments. For flash-varlen attention, must include:
             - varlen_kwargs: dict containing cu_seqlens and max_seqlen
+            For linformer, may include kv_sort_idx: (B, M) order in which the keys enter the sequence projection.
 
         Raises:
             ValueError: If the input arguments are invalid or if flash-varlen is used without varlen_kwargs.
@@ -426,9 +444,7 @@ class Attention(nn.Module):
                 attn_mask = attn_bias
             out = self.attn(q, k, v, attn_mask=attn_mask)
         elif self.attn_type == "linformer":
-            k = linformer_project(k, self.proj_k, kv_mask)
-            v = linformer_project(v, self.proj_v, kv_mask)
-            out = self.attn(q, k, v)
+            out = self._linformer_attention(q, k, v, kv_mask, attn_mask, kwargs.get("kv_sort_idx"))
         elif self.attn_type == "flash":
             out = self.attn(q, k, v, window_size=self.window_size)
         else:
