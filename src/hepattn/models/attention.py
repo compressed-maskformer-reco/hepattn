@@ -13,6 +13,8 @@ except ImportError:
         flash_attn_func = None  # ty: ignore [conflicting-declarations]
         flash_attn_varlen_func = None  # ty: ignore [conflicting-declarations]
 
+from masked_linformer import init_ as linformer_init
+from masked_linformer import project as linformer_project
 from torch import Size, Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask, _score_mod_signature, flex_attention
 from torch.nn.functional import scaled_dot_product_attention
@@ -20,10 +22,17 @@ from torch.nn.functional import scaled_dot_product_attention
 from hepattn.models.norm import NORM_TYPES
 from hepattn.utils.bert_padding import pad_input, unpad_input
 
-ATTN_TYPES = {"torch": scaled_dot_product_attention, "flex": flex_attention, "flash": flash_attn_func, "flash-varlen": flash_attn_varlen_func}
+# linformer projects the keys and values along the sequence axis, then runs ordinary attention on the result
+ATTN_TYPES = {
+    "torch": scaled_dot_product_attention,
+    "flex": flex_attention,
+    "flash": flash_attn_func,
+    "flash-varlen": flash_attn_varlen_func,
+    "linformer": scaled_dot_product_attention,
+}
 
 # Which attentiom types support varlen / kv padding
-VARLEN_ATTN_TYPES = ["torch", "flash-varlen"]
+VARLEN_ATTN_TYPES = ["torch", "flash-varlen", "linformer"]
 
 # Which attention types support attention masking
 ATTN_MASK_ATTN_TYPES = ["torch", "flex"]
@@ -147,6 +156,8 @@ class Attention(nn.Module):
         norm: str | None = None,
         value_residual: bool = False,
         is_first_layer: bool = False,
+        linformer_seq_len: int | None = None,
+        linformer_k: int | None = None,
     ) -> None:
         """Multi-head attention with optional QKV normalization.
 
@@ -163,6 +174,8 @@ class Attention(nn.Module):
                 Must be one of: LayerNorm, RMSNorm, FastLayerNorm, CustomRMSNorm, SimpleRMSNorm, DyT.
             value_residual: Whether to use value residual connections across layers.
             is_first_layer: Whether this is the first layer (for value residual).
+            linformer_seq_len: Linformer only: maximum key/value length, the rows of the sequence projections.
+            linformer_k: Linformer only: projected key/value length.
 
         Raises:
             ValueError: If qkv_norm is True but norm is not provided, or if norm type is unsupported.
@@ -192,6 +205,12 @@ class Attention(nn.Module):
         if self.value_residual and not self.is_first_layer:
             self.value_residual_mix = nn.Sequential(nn.Linear(dim, num_heads), nn.Sigmoid())
 
+        if attn_type == "linformer":
+            if linformer_seq_len is None or linformer_k is None:
+                raise ValueError("linformer attention needs linformer_seq_len and linformer_k")
+            self.proj_k = nn.Parameter(linformer_init(torch.empty(linformer_seq_len, linformer_k)))
+            self.proj_v = nn.Parameter(linformer_init(torch.empty(linformer_seq_len, linformer_k)))
+
         if self.qkv_norm:
             assert norm is not None
             norm_cls = NORM_TYPES[norm]
@@ -218,6 +237,8 @@ class Attention(nn.Module):
         self.attn_type = attn_type
         if attn_type not in ATTN_TYPES:
             raise ValueError(f"Invalid attention type: {attn_type}")
+        if (attn_type == "linformer") != hasattr(self, "proj_k"):
+            raise ValueError("linformer owns trained projection parameters, so it can only be chosen when the module is built")
         self.attn = ATTN_TYPES[attn_type]
 
         self.window_size = None
@@ -404,6 +425,10 @@ class Attention(nn.Module):
 
                 attn_mask = attn_bias
             out = self.attn(q, k, v, attn_mask=attn_mask)
+        elif self.attn_type == "linformer":
+            k = linformer_project(k, self.proj_k, kv_mask)
+            v = linformer_project(v, self.proj_v, kv_mask)
+            out = self.attn(q, k, v)
         elif self.attn_type == "flash":
             out = self.attn(q, k, v, window_size=self.window_size)
         else:

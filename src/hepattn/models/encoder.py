@@ -217,6 +217,9 @@ class Encoder(nn.Module):
         # We don't need to use the stable sort assuming that the sort values are unique
         x_sort_idx = None
         if x_sort_value is not None:
+            # Padding goes last so the real tokens stay contiguous in sorted order
+            if kv_mask is not None:
+                x_sort_value = x_sort_value.masked_fill(~kv_mask, float("inf"))
             x_sort_idx = torch.argsort(x_sort_value, dim=-1)
             x = torch.gather(x, dim=-2, index=x_sort_idx.unsqueeze(-1).expand_as(x))
 
