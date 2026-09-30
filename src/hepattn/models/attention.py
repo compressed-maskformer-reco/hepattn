@@ -17,16 +17,23 @@ from torch import Size, Tensor, nn
 from torch.nn.attention.flex_attention import BlockMask, _score_mod_signature, flex_attention
 from torch.nn.functional import scaled_dot_product_attention
 
+from hepattn.models.linformer import LinformerAttention
 from hepattn.models.norm import NORM_TYPES
 from hepattn.utils.bert_padding import pad_input, unpad_input
 
-ATTN_TYPES = {"torch": scaled_dot_product_attention, "flex": flex_attention, "flash": flash_attn_func, "flash-varlen": flash_attn_varlen_func}
+ATTN_TYPES = {
+    "torch": scaled_dot_product_attention,
+    "flex": flex_attention,
+    "flash": flash_attn_func,
+    "flash-varlen": flash_attn_varlen_func,
+    "linformer": None,  # a module with its own projections, built per layer in set_backend
+}
 
 # Which attentiom types support varlen / kv padding
-VARLEN_ATTN_TYPES = ["torch", "flash-varlen"]
+VARLEN_ATTN_TYPES = ["torch", "flash-varlen", "linformer"]
 
 # Which attention types support attention masking
-ATTN_MASK_ATTN_TYPES = ["torch", "flex"]
+ATTN_MASK_ATTN_TYPES = ["torch", "flex"]  # linformer mixes keys along the sequence axis: no per-query mask
 
 # Which attention types support attention biasing
 ATTN_BIAS_ATTN_TYPES = ["torch"]
@@ -147,6 +154,8 @@ class Attention(nn.Module):
         norm: str | None = None,
         value_residual: bool = False,
         is_first_layer: bool = False,
+        linformer_proj_dim: int = 256,
+        linformer_seq_len: int = 256,
     ) -> None:
         """Multi-head attention with optional QKV normalization.
 
@@ -163,6 +172,8 @@ class Attention(nn.Module):
                 Must be one of: LayerNorm, RMSNorm, FastLayerNorm, CustomRMSNorm, SimpleRMSNorm, DyT.
             value_residual: Whether to use value residual connections across layers.
             is_first_layer: Whether this is the first layer (for value residual).
+            linformer_proj_dim: dimensionality of the low rank projection
+            linformer_seq_len: max sequence length for the linformer
 
         Raises:
             ValueError: If qkv_norm is True but norm is not provided, or if norm type is unsupported.
@@ -184,10 +195,18 @@ class Attention(nn.Module):
         self.qkv_norm = qkv_norm
         self.value_residual = value_residual
         self.is_first_layer = is_first_layer
+        self.linformer_proj_dim = linformer_proj_dim
+        self.linformer_seq_len = linformer_seq_len
 
-        self.in_proj_weight = nn.Parameter(torch.empty(3 * dim, dim))
-        self.in_proj_bias = nn.Parameter(torch.empty(3 * dim)) if bias else None
-        self.out_proj = nn.Linear(dim, dim, bias=bias)
+        if attn_type != "linformer":
+            self.in_proj_weight = nn.Parameter(torch.empty(3 * dim, dim))
+            self.in_proj_bias = nn.Parameter(torch.empty(3 * dim)) if bias else None
+            self.out_proj = nn.Linear(dim, dim, bias=bias)
+
+        if attn_type == "linformer" and value_residual:
+            # The Linformer path skips _prepare_qkv, where the value residual is mixed in; allowing
+            # it would leave value_residual_mix untrained and abort DDP on unused parameters.
+            raise ValueError("value_residual is not supported with attn_type='linformer'; set value_residual: false on that encoder")
 
         if self.value_residual and not self.is_first_layer:
             self.value_residual_mix = nn.Sequential(nn.Linear(dim, num_heads), nn.Sigmoid())
@@ -200,13 +219,16 @@ class Attention(nn.Module):
             self.v_norm = norm_cls(dim)
 
         self.set_backend(attn_type, torch_compile=torch_compile, window_size=window_size)
-        self.reset_parameters()
+        if attn_type != "linformer":
+            self.reset_parameters()
 
         if window_size and not self.window_size:
             raise ValueError("window_size not set correctly")
 
     def reset_parameters(self):
-        """Initialize the parameters."""
+        """Initialize the parameters (the Linformer backend initialises its own)."""
+        if self.attn_type == "linformer":
+            return
         nn.init.xavier_uniform_(self.in_proj_weight)
         if self.bias:
             nn.init.constant_(self.in_proj_bias, 0.0)
@@ -215,10 +237,21 @@ class Attention(nn.Module):
     def set_backend(self, attn_type: str, torch_compile: bool = False, window_size: int | None = None) -> str:
         # Allow to change the attention backend after initialization, when evaluating the model
 
-        self.attn_type = attn_type
         if attn_type not in ATTN_TYPES:
             raise ValueError(f"Invalid attention type: {attn_type}")
-        self.attn = ATTN_TYPES[attn_type]
+        # Linformer owns its projections, so it cannot be swapped with the packed-projection
+        # backends after construction (their parameters differ).
+        if hasattr(self, "attn") and (attn_type == "linformer") != (self.attn_type == "linformer"):
+            raise ValueError("Cannot switch between the linformer backend and the others: their parameters differ")
+        self.attn_type = attn_type
+        if attn_type == "linformer":
+            # Built once; a later set_backend("linformer") (e.g. at evaluation) keeps the trained weights.
+            if not isinstance(getattr(self, "attn", None), LinformerAttention):
+                self.attn = LinformerAttention(
+                    self.dim, seq_len=self.linformer_seq_len, k=self.linformer_proj_dim, heads=self.num_heads, dim_head=self.head_dim
+                )
+        else:
+            self.attn = ATTN_TYPES[attn_type]
 
         self.window_size = None
         if attn_type in FLASH_ATTN_TYPES:
@@ -366,7 +399,8 @@ class Attention(nn.Module):
             assert self.attn_type in ATTN_BIAS_ATTN_TYPES, msg
 
         # Prepare queries, keys, and values
-        q, k, v = self._prepare_qkv(q, k, v, initial_values)
+        if self.attn_type != "linformer":
+            q, k, v = self._prepare_qkv(q, k, v, initial_values)
 
         # Handle flash-varlen attention
         if self.attn_type == "flash-varlen":
@@ -406,6 +440,18 @@ class Attention(nn.Module):
             out = self.attn(q, k, v, attn_mask=attn_mask)
         elif self.attn_type == "flash":
             out = self.attn(q, k, v, window_size=self.window_size)
+        elif self.attn_type == "linformer":
+            # linformer is listed in VARLEN_ATTN_TYPES, so the assert above lets kv_mask
+            # through -- but the LinformerAttention call only takes attn_mask. Fold the
+            # padding masks in here, exactly as the torch branch does, or padded slots are
+            # attended to as if they were real hits (measured leak: 1.3e+01 on a toy batch).
+            # kv_mask CANNOT be folded into attn_mask here: linformer projects K/V along the
+            # sequence axis first, so padded rows are already blended into every projected
+            # column before any score-space mask can act. It has to be zeroed pre-projection,
+            # which LinformerAttention does itself.
+            qkv_norms = (self.q_norm, self.k_norm, self.v_norm) if self.qkv_norm else None
+            # linformer returns model-dim output; no head recombine / out_proj
+            return self.attn(q, k, v, attn_mask=attn_mask, kv_mask=kv_mask, qkv_norms=qkv_norms)
         else:
             raise ValueError(f"Invalid attention type: {self.attn_type}")
 

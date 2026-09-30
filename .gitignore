@@ -129,3 +129,6 @@ src/hepattn/experiments/trackml/eval/
 
 # Out-of-environment builds, e.g. setup/build_torch_linear_assignment.sh
 vendor/
+# Site-specific Polaris values (project, queues, paths) — never commit
+polaris/env.sh
+polaris/logs/
