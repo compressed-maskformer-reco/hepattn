@@ -14,7 +14,7 @@
 #          submit_validate_run.sh
 
 #SBATCH -p hpg-turin
-#SBATCH --account=your-account
+#SBATCH --account=avery
 #SBATCH --nodes=1
 #SBATCH --export=ALL
 #SBATCH --gres=gpu:l4:1
@@ -23,14 +23,23 @@
 #SBATCH --mem=50G
 #SBATCH --time=01:00:00
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=your-email@example.com
-#SBATCH --output=/path/to/hepattn/src/hepattn/experiments/clic/slurm_logs/slurm-%j.%x.out
+#SBATCH --output=slurm_logs/slurm-%j.%x.out
 
 set -euo pipefail
 
 module load cuda/12.8.1
 
-CLIC=/path/to/hepattn/src/hepattn/experiments/clic
+# Submitted from this directory (src/hepattn/experiments/clic), which is where the job finds
+# the repository and writes its log (slurm_logs/).
+CLIC=${SLURM_SUBMIT_DIR:-$PWD}
+[ -f "$CLIC/main.py" ] || { echo "ERROR: submit from src/hepattn/experiments/clic, not $CLIC" >&2; exit 1; }
+REPO=$(cd "$CLIC/../../../.." && pwd)
+
+# The configs carry another cluster's data paths; on HPG the data is on /cmsuf.
+CLIC_DATA=${CLIC_DATA:-/cmsuf/data/store/user/mmazza/hepattn_clic_data}
+DATA_ARGS="--data.train_path=$CLIC_DATA/train_clic_fix.root \
+  --data.valid_path=$CLIC_DATA/val_clic_fix.root \
+  --data.test_path=$CLIC_DATA/test_clic_common_infer.root"
 cd "$CLIC"
 export TMPDIR=/var/tmp/
 
@@ -60,9 +69,10 @@ PYTORCH_CMD="python main.py validate \
   --config ${CONFIG_RUN} \
   --trainer.devices=1 \
   --trainer.num_nodes=1 \
+  $DATA_ARGS \
   --ckpt_path $CKPT"
 
 apptainer run --nv --bind /blue/,/cmsuf/ \
-  /path/to/hepattn/pixi.sif pixi run -e clic $PYTORCH_CMD
+  "$REPO/pixi.sif" pixi run -e clic $PYTORCH_CMD
 
 echo "Done!"

@@ -9,12 +9,12 @@
 #
 # Usage:
 #   sbatch submit_training_b200.sh <config.yaml> [extra main.py args...]
-#   sbatch submit_training_b200.sh configs/base.yaml
-#   sbatch --time=00:30:00 submit_training_b200.sh configs/base.yaml --trainer.max_steps=300   # preflight
+#   sbatch submit_training_b200.sh studies/linformer_size/configs/small_ref.yaml
+#   sbatch --time=00:30:00 submit_training_b200.sh studies/linformer_size/configs/small_ref.yaml --trainer.max_steps=300   # preflight
 
 #SBATCH --job-name=clic-train-b200
 #SBATCH -p hpg-b200
-#SBATCH --account=your-account
+#SBATCH --account=avery
 #SBATCH --nodes=1
 #SBATCH --export=ALL
 #SBATCH --gres=gpu:b200:1
@@ -24,15 +24,24 @@
 # --time: 1x B200 with the jv matcher, 200 epochs: v7 measured 7 h 40 (job 40405423), v6 11 h 22 (job 40393482). 1.3x the v6 time, rounded up. See README_HPG.md, Measured runtimes.
 #SBATCH --time=15:00:00
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=your-email@example.com
-#SBATCH --output=/path/to/hepattn/src/hepattn/experiments/clic/slurm_logs/slurm-%j.%x.out
+#SBATCH --output=slurm_logs/slurm-%j.%x.out
 
 set -euo pipefail
 
 # Load CUDA matching the container build
 module load cuda/12.8.1
 
-REPO=/path/to/hepattn
+# Submitted from this directory (src/hepattn/experiments/clic), which is where the job finds
+# the repository and writes its log (slurm_logs/).
+CLIC=${SLURM_SUBMIT_DIR:-$PWD}
+[ -f "$CLIC/main.py" ] || { echo "ERROR: submit from src/hepattn/experiments/clic, not $CLIC" >&2; exit 1; }
+REPO=$(cd "$CLIC/../../../.." && pwd)
+
+# The configs carry another cluster's data paths; on HPG the data is on /cmsuf.
+CLIC_DATA=${CLIC_DATA:-/cmsuf/data/store/user/mmazza/hepattn_clic_data}
+DATA_ARGS="--data.train_path=$CLIC_DATA/train_clic_fix.root \
+  --data.valid_path=$CLIC_DATA/val_clic_fix.root \
+  --data.test_path=$CLIC_DATA/test_clic_common_infer.root"
 CONFIG_PATH="${1:?Usage: sbatch submit_training_b200.sh <config.yaml> [extra main.py args...]}"
 EXTRA_ARGS=("${@:2}")
 
@@ -48,7 +57,7 @@ echo "Hostname: $(hostname)"
 echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-}"
 nvidia-smi
 
-cd $REPO/src/hepattn/experiments/clic/
+cd "$CLIC"
 echo "Moved dir, now in: ${PWD}"
 export TMPDIR=/var/tmp/
 
@@ -66,6 +75,7 @@ PYTORCH_CMD="python main.py fit --config $CONFIG_PATH \
   --trainer.devices=1 \
   --data.batch_size=2048 \
   --model.model.matcher.init_args.device_solver=jv \
+  $DATA_ARGS \
   ${EXTRA_ARGS[*]}"
 
 PIXI_CMD="pixi run -e clic $PYTORCH_CMD"

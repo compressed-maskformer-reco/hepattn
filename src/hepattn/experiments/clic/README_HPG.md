@@ -9,9 +9,11 @@ on UF's HiPerGator cluster. For the model/paper overview and data-format details
 - **GPU partitions:**
   - `hpg-b200` — B200 192 GB (up to 4/node)
   - `hpg-turin` — L4 24 GB (up to 3/node)
-- **Container + env:** the repo ships a pixi Apptainer image at the repo root
-  (`pixi.sif`). Training runs inside it via `apptainer run --nv ... pixi run -e clic ...`;
-  the submit scripts already do this — you don't need to enter it by hand to submit.
+- **Container + env:** the submit scripts run `apptainer run --nv <repo>/pixi.sif pixi run
+  -e clic ...`. `pixi.sif` is pixi's CUDA image (gitignored), pulled once into the repo root
+  with the `apptainer pull` command in the [top-level README](../../../../README.md); the
+  `clic` environment itself is the repo's `.pixi/envs/clic`, installed with
+  `pixi install -e clic`.
 - **CUDA module:** `module load cuda/12.8.1` (matches the container build; already in
   the submit scripts).
 
@@ -28,23 +30,28 @@ quota (the submit scripts bind both `/blue` and `/cmsuf` into the container):
 └── test_clic_common_infer.root  # 250 MB
 ```
 
-Configs point at these paths directly (`data.train_path` / `valid_path` / `test_path`).
-If you write a new config, make sure its paths point here and **not** at a Jupyter/
-container path like `/home/jovyan/...`, which does not exist on the compute nodes.
+The configs carry another cluster's paths, so the submit scripts override
+`data.train_path` / `valid_path` / `test_path` with the files under `$CLIC_DATA`, which
+defaults to `/cmsuf/data/store/user/mmazza/hepattn_clic_data` (readable by everyone). To use
+another copy, export it before submitting: `CLIC_DATA=/path/to/data sbatch ...`.
 
 ## Submitting a training
 
-All commands run from the experiment directory:
+Submit from the experiment directory: the scripts locate the repository from it, refuse to
+run if submitted from anywhere else, and write their logs to its `slurm_logs/`. They need no
+editing. They charge the `avery` account and mail your default address (pass `--account` or
+`--mail-user` to `sbatch` to change either).
 
 ```shell
-cd /path/to/hepattn/src/hepattn/experiments/clic
+cd <repo>/src/hepattn/experiments/clic
 ```
 
 ### Submit scripts
 
 One script per kind of job. The model config only defines the model; each script sets the
 hardware-dependent settings (device count, batch size per GPU, matcher) on the `main.py`
-command line, so any config in `configs/` runs on either machine unchanged.
+command line, so any config runs on either machine unchanged. The small-model reference is
+`studies/linformer_size/configs/small_ref.yaml` (`dim: 64`, the v7 size on the current model).
 
 | Script | Partition | GPUs | `--mem` | Sets | Use |
 |---|---|---|---|---|---|
@@ -57,15 +64,11 @@ The training scripts take the config as their first argument, and anything after
 straight through to `main.py`:
 
 ```shell
-sbatch submit_training_b200.sh configs/base.yaml
-sbatch submit_training_l4.sh configs/base.yaml
+sbatch submit_training_b200.sh studies/linformer_size/configs/small_ref.yaml
+sbatch submit_training_l4.sh studies/linformer_size/configs/small_ref.yaml
 sbatch submit_training_l4.sh configs/base.yaml --data.batch_size=256   # if a large model OOMs on 24 GB
 sbatch --export=ALL,RUN_DIR=logs/<run_folder>,CKPT_NAME=<ckpt_file> submit_eval_l4.sh
 ```
-
-Before the first submission, replace the placeholders in each script (`/path/to/hepattn`,
-`your-account`, `your-email@example.com`), or override the `#SBATCH` ones on the `sbatch`
-command line.
 
 The B200 script needs the GPU matcher's extension, built once into
 `vendor/torch-linear-assignment` (see [below](#solving-the-matching-on-the-gpu)); it checks
@@ -83,9 +86,11 @@ hardware (2048 on a B200, 512 on an L4).
 ### Interactive (debug) run
 
 ```shell
-apptainer shell --nv --bind /blue/ /path/to/hepattn/pixi.sif
+apptainer shell --nv --bind /blue/,/cmsuf/ <repo>/pixi.sif
 pixi shell -e clic
-python main.py fit --config configs/base.yaml --trainer.devices=1
+python main.py fit --config studies/linformer_size/configs/small_ref.yaml --trainer.devices=1 \
+    --data.train_path=/cmsuf/data/store/user/mmazza/hepattn_clic_data/train_clic_fix.root \
+    --data.valid_path=/cmsuf/data/store/user/mmazza/hepattn_clic_data/val_clic_fix.root
 ```
 
 Everything CLIC on HPG uses the `clic` environment: the submit scripts run
@@ -115,8 +120,10 @@ Leave it off on the L4 nodes, which the model already keeps busy.
 Every `#SBATCH --time` in the submit scripts is set from a measured run, at 1.3x the
 measured wall time rounded up to the hour, and carries a comment naming that run. Do not
 copy a `--time` line from another script: for months every B200 training asked for four
-days and finished in seven hours. The reference measurements, all 200 epochs (v6 is the
-`base.yaml` model; v7 a smaller variant):
+days and finished in seven hours. The reference measurements, all 200 epochs, are of the
+model before the clic-paper-tag architecture was restored (#8): v6 at `base.yaml`'s size
+(`dim: 256`) and v7 at `small_ref.yaml`'s (`dim: 64`). The current models differ (SwiGLU
+dense layers, among others), so treat these as estimates until they are re-measured:
 
 | model | hardware | matcher | wall time | request | job |
 |---|---|---|---|---|---|
@@ -134,7 +141,7 @@ shared pages, so do not read `sacct` memory figures as usage.
 **No measurement for your model?** Run a short preflight and scale up from its step rate:
 
 ```shell
-sbatch --time=00:30:00 submit_training_b200.sh configs/<cfg>.yaml --trainer.max_steps=300
+sbatch --time=00:30:00 submit_training_b200.sh studies/linformer_size/configs/small_ref.yaml --trainer.max_steps=300
 ```
 
 ## Outputs & monitoring
