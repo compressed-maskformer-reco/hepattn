@@ -100,14 +100,13 @@ host-bound and the Hungarian matching (device-to-host copy plus a threaded solve
 dominates it: with the host matcher a B200 training takes about 3x longer. The `Matcher`
 has an opt-in GPU solver for exactly that case, and `submit_training_b200.sh` turns it on
 (`device_solver=jv`) and puts the extension on the container's `PYTHONPATH`. Build it once,
-from the repo root, for L4 and B200:
+from the repo root; it compiles for L4 and B200 unless `TLA_CUDA_ARCH_LIST` says otherwise:
 
 ```shell
-TORCH_CUDA_ARCH_LIST="8.9;10.0" pixi run -e clic bash setup/build_torch_linear_assignment.sh
+pixi run -e clic bash setup/build_torch_linear_assignment.sh
 ```
 
-Set `TORCH_CUDA_ARCH_LIST` explicitly: otherwise the `clic` environment's CUDA activation
-sets a list containing `10.1`, which this torch does not accept. See the
+See the
 [top-level README](../../../../README.md#optional-solving-the-matching-on-the-gpu).
 Leave it off on the L4 nodes, which the model already keeps busy.
 
