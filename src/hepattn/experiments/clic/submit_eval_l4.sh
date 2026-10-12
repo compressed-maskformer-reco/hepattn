@@ -5,17 +5,18 @@
 # Submit with:
 #   sbatch --job-name=clic-eval-<tag> \
 #          --export=ALL,RUN_DIR=logs/<run_folder>,CKPT_NAME=<ckpt_file> \
-#          submit_eval_run.sh
+#          submit_eval_l4.sh
 
 #SBATCH -p hpg-turin
-#SBATCH --account=avery
+#SBATCH --account=your-account
 #SBATCH --nodes=1
 #SBATCH --export=ALL
 #SBATCH --gres=gpu:l4:1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=50G
-#SBATCH --time=04:00:00
+# --time: 1x L4 evaluation: measured under 2 min (jobs 41332603-06). 1.3x, rounded up to the hour. See README_HPG.md, Measured runtimes.
+#SBATCH --time=00:30:00
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=your-email@example.com
 #SBATCH --output=/path/to/hepattn/src/hepattn/experiments/clic/slurm_logs/slurm-%j.%x.out

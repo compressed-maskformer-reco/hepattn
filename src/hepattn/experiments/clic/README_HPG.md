@@ -42,24 +42,34 @@ cd /path/to/hepattn/src/hepattn/experiments/clic
 
 ### Submit scripts
 
-| Script | Partition | Hardware | Nodes × GPU | `--mem` | Config source |
-|---|---|---|---|---|---|
-| `submit_training_hpg.sh` | `hpg-b200` | B200 | 1 × 4 | 300G | hardcoded `configs/base.yaml` |
-| `submit_training_hpg_1gpu.sh` | `hpg-b200` | B200 | 1 × 1 | 60G | hardcoded `configs/base.yaml` |
-| `submit_training_hpg_l4.sh` | `hpg-turin` | L4 | 1 × 3 (= **3 L4**) | 150G | **argument** (`$1`) |
-| `submit_training_hpg_l4_2nodes.sh` | `hpg-turin` | L4 | 2 × 3 (= **6 L4**) | 150G | **argument** (`$1`) |
+One script per kind of job. The model config only defines the model; each script sets the
+hardware-dependent settings (device count, batch size per GPU, matcher) on the `main.py`
+command line, so any config in `configs/` runs on either machine unchanged.
 
-The L4 scripts take the config as their first argument, so you can reuse them for any
-config without editing the file:
+| Script | Partition | GPUs | `--mem` | Sets | Use |
+|---|---|---|---|---|---|
+| `submit_training_b200.sh` | `hpg-b200` | 1 B200 | 60G | batch 2048, `device_solver: jv` | fastest way to train |
+| `submit_training_l4.sh` | `hpg-turin` | 3 L4 | 150G | batch 512/GPU, host matcher | the GPU matcher does not pay on L4s |
+| `submit_eval_l4.sh` | `hpg-turin` | 1 L4 | 50G | inference mode via `configs/eval.yaml` | evaluate a checkpoint |
+| `submit_validate_run.sh` | `hpg-turin` | 1 L4 | 50G | | re-score a checkpoint on the validation set |
+
+The training scripts take the config as their first argument, and anything after it passes
+straight through to `main.py`:
 
 ```shell
-sbatch submit_training_hpg_l4.sh configs/base.yaml          # 3 L4
-sbatch submit_training_hpg_l4_2nodes.sh configs/base.yaml   # 6 L4
+sbatch submit_training_b200.sh configs/base.yaml
+sbatch submit_training_l4.sh configs/base.yaml
+sbatch submit_training_l4.sh configs/base.yaml --data.batch_size=256   # if a large model OOMs on 24 GB
+sbatch --export=ALL,RUN_DIR=logs/<run_folder>,CKPT_NAME=<ckpt_file> submit_eval_l4.sh
 ```
 
-The B200 scripts still hardcode `configs/base.yaml` near the bottom
-(`CONFIG_PATH="..."`) — edit that line to change config, or copy the pattern above to
-make them argument-driven.
+Before the first submission, replace the placeholders in each script (`/path/to/hepattn`,
+`your-account`, `your-email@example.com`), or override the `#SBATCH` ones on the `sbatch`
+command line.
+
+The B200 script needs the GPU matcher's extension, built once into
+`vendor/torch-linear-assignment` (see [below](#solving-the-matching-on-the-gpu)); it checks
+for it before training starts.
 
 ### Key rule: devices must match the allocation
 
@@ -67,16 +77,8 @@ make them argument-driven.
 `--nodes` **must equal** `--trainer.num_nodes`. The scripts set the `trainer.*`
 overrides on the `python main.py` line to match their SBATCH directives — if you
 change the GPU count, change both. Total GPUs = `num_nodes × devices`; global batch =
-`num_nodes × devices × data.batch_size`.
-
-`batch_size` comes from the config unless a script overrides it. The 6×L4 script does
-**not** override it (e.g. `512`/GPU → global 3072). On 24 GB L4s a large model may
-OOM at epoch 0 — if so, append an override, which passes straight through to
-`main.py`:
-
-```shell
-sbatch submit_training_hpg_l4_2nodes.sh configs/base.yaml --data.batch_size=256
-```
+`num_nodes × devices × data.batch_size`, and the scripts set `data.batch_size` for their
+hardware (2048 on a B200, 512 on an L4).
 
 ### Interactive (debug) run
 
@@ -91,16 +93,50 @@ Everything CLIC on HPG uses the `clic` environment: the submit scripts run
 too. It is the GPU `default` environment plus the analysis packages, so there is no
 need to install `default` as well (each environment is ~15 GB).
 
-### Optional: solve the matching on the GPU
+### Solving the matching on the GPU
 
 A single B200 is not saturated by the CLIC model, so the training step there is
 host-bound and the Hungarian matching (device-to-host copy plus a threaded solve)
-dominates it. The `Matcher` has an opt-in GPU solver for exactly that case: build it
-once with `pixi run -e clic bash setup/build_torch_linear_assignment.sh`, export the
-`PYTHONPATH` and `LD_LIBRARY_PATH` it prints in the submit script, and set
-`device_solver: jv` on the matcher in the config. See the
+dominates it: with the host matcher a B200 training takes about 3x longer. The `Matcher`
+has an opt-in GPU solver for exactly that case, and `submit_training_b200.sh` turns it on
+(`device_solver=jv`) and puts the extension on the container's `PYTHONPATH`. Build it once,
+from the repo root, for L4 and B200:
+
+```shell
+TORCH_CUDA_ARCH_LIST="8.9;10.0" pixi run -e clic bash setup/build_torch_linear_assignment.sh
+```
+
+Set `TORCH_CUDA_ARCH_LIST` explicitly: otherwise the `clic` environment's CUDA activation
+sets a list containing `10.1`, which this torch does not accept. See the
 [top-level README](../../../../README.md#optional-solving-the-matching-on-the-gpu).
 Leave it off on the L4 nodes, which the model already keeps busy.
+
+## Measured runtimes: what to request
+
+Every `#SBATCH --time` in the submit scripts is set from a measured run, at 1.3x the
+measured wall time rounded up to the hour, and carries a comment naming that run. Do not
+copy a `--time` line from another script: for months every B200 training asked for four
+days and finished in seven hours. The reference measurements, all 200 epochs (v6 is the
+`base.yaml` model; v7 a smaller variant):
+
+| model | hardware | matcher | wall time | request | job |
+|---|---|---|---|---|---|
+| v7 | 1x B200, batch 2048 | `device_solver: jv` | 6 h 28 to 7 h 40 | 10 h | 40405423, 41331284 |
+| v7 | 1x B200, batch 2048 | host (`lap1015_late`) | 23 h 15 | 31 h | 40400036 |
+| v6 | 1x B200, batch 2048 | `device_solver: jv` | 11 h 22 | 15 h | 40393482 |
+| v6 | 1x B200, batch 2048 | host | 33 h 03 | 44 h | 38598204 |
+| v6 | 3x L4, batch 256/GPU | host | 31 h 55 | 42 h | 38469247 |
+| any | 1x L4 evaluation | | under 2 min | 30 min | 41332603 |
+
+Memory requests (60 GB per B200 job, 150 GB for 3x L4, 50 GB for evaluation) have never
+been exceeded. The accounting for the apptainer step double-counts the dataloader workers'
+shared pages, so do not read `sacct` memory figures as usage.
+
+**No measurement for your model?** Run a short preflight and scale up from its step rate:
+
+```shell
+sbatch --time=00:30:00 submit_training_b200.sh configs/<cfg>.yaml --trainer.max_steps=300
+```
 
 ## Outputs & monitoring
 
@@ -131,6 +167,6 @@ python main.py test \
 ```
 
 Also remove the `Compile` callback and set attention to `torch` in the config before
-testing. There are ready-made eval scripts: `submit_eval_hpg_l4.sh` and
-`submit_eval_test_hpg_l4.sh`. Produce performance plots with
+testing. `submit_eval_l4.sh` does all of that through `configs/eval.yaml`; pass the run
+directory and checkpoint name as shown above. Produce performance plots with
 [`notebooks/performance.ipynb`](./notebooks/performance.ipynb).
