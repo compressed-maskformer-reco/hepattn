@@ -63,7 +63,8 @@ export TMPDIR=/var/tmp/
 
 # The GPU matcher's extension lives outside the pixi environment (see
 # setup/build_torch_linear_assignment.sh); it needs the environment's libstdc++ at run time.
-export APPTAINERENV_PYTHONPATH=$REPO/vendor/torch-linear-assignment
+# Prepended to the submitting shell's PYTHONPATH, which would otherwise not reach the container.
+export APPTAINERENV_PYTHONPATH=$REPO/vendor/torch-linear-assignment${PYTHONPATH:+:$PYTHONPATH}
 export APPTAINERENV_LD_LIBRARY_PATH=$REPO/.pixi/envs/clic/lib
 
 # Fail here, before burning the allocation, if the build is missing or CPU-only.
