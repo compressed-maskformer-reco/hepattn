@@ -1,0 +1,27 @@
+# Evaluation overlay for models with linformer attention. Pass AFTER the run's config:
+#   python main.py test --config logs/<run>/config.yaml --config configs/eval_linformer.yaml --ckpt_path <ckpt>
+# or EVAL_CONFIG=configs/eval_linformer.yaml with submit_eval_l4.sh.
+#
+# configs/eval.yaml without its `encoder: attn_type: torch` override. That override rebuilds the encoder with torch
+# attention before the checkpoint is loaded, and a torch attention has no proj_k/proj_v for a linformer checkpoint's
+# sequence projections. Linformer is a plain torch implementation, so there is no kernel to swap away from.
+trainer:
+  precision: 32-true
+  callbacks:
+    - class_path: hepattn.callbacks.InferenceTimer
+    - class_path: hepattn.experiments.clic.PflowPredictionWriter
+    - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+      init_args:
+        refresh_rate: 50
+model:
+  model:
+    init_args:
+      matcher:
+        init_args:
+          # The test step's matching runs on the host solver: every solver finds the optimal assignment, and a run
+          # trained with `device_solver: jv` would otherwise need the GPU solver's out-of-environment build.
+          device_solver: null
+data:
+  is_inference: true
+  num_workers: 4
+matmul_precision: highest

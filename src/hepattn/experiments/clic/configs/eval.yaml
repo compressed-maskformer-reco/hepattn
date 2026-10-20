@@ -10,6 +10,10 @@ model:
   model:
     encoder:
       attn_type: torch
+    matcher:
+      # The test step's matching runs on the host solver: every solver finds the optimal assignment, and a run
+      # trained with `device_solver: jv` would otherwise need the GPU solver's out-of-environment build.
+      device_solver: null
 data:
   is_inference: true
   num_workers: 4
