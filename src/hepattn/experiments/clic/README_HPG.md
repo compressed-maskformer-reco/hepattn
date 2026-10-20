@@ -70,6 +70,20 @@ sbatch submit_training_l4.sh configs/base.yaml --data.batch_size=256   # if a la
 sbatch --export=ALL,RUN_DIR=logs/<run_folder>,CKPT_NAME=<ckpt_file> submit_eval_l4.sh
 ```
 
+An evaluation can also be chained behind its training. The run folder and checkpoint do not
+exist at submit time, so pass the training's job ID instead: when the evaluation starts, it
+finds the run folder whose `metadata.yaml` names that job and evaluates its lowest-`val_loss`
+checkpoint. Models with linformer attention need `EVAL_CONFIG=configs/eval_linformer.yaml`,
+because `configs/eval.yaml` rebuilds the encoder with torch attention:
+
+```shell
+TRAIN=$(sbatch --parsable submit_training_b200.sh <config.yaml>)
+sbatch --dependency=afterok:$TRAIN --export=ALL,TRAIN_JOB=$TRAIN,EVAL_CONFIG=configs/eval_linformer.yaml submit_eval_l4.sh
+```
+
+`afterok` starts the evaluation only if the training succeeds, and the evaluation exits non-zero
+if `main.py test` fails, so a failed evaluation shows as FAILED in `sacct`.
+
 The B200 script needs the GPU matcher's extension, built once into
 `vendor/torch-linear-assignment` (see [below](#solving-the-matching-on-the-gpu)); it checks
 for it before training starts.
@@ -173,6 +187,8 @@ python main.py test \
 ```
 
 Also remove the `Compile` callback and set attention to `torch` in the config before
-testing. `submit_eval_l4.sh` does all of that through `configs/eval.yaml`; pass the run
-directory and checkpoint name as shown above. Produce performance plots with
+testing. `submit_eval_l4.sh` does all of that through `configs/eval.yaml` (or
+`configs/eval_linformer.yaml`, `EVAL_CONFIG`); pass the run directory and checkpoint name, or
+the training job ID, as shown above. Both overlays also switch the matcher to the host solver,
+so a run trained with `device_solver: jv` evaluates without the GPU matcher's build. Produce performance plots with
 [`notebooks/performance.ipynb`](./notebooks/performance.ipynb).
