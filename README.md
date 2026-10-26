@@ -98,7 +98,22 @@ will *not* do it if the environment already exists — pixi sees the package ver
 unchanged and skips it, which is how a build can sit stale across edits to the C++
 source.
 
-Two things guard this, and are worth knowing about if you change the build:
+**To build for the local CPU only:**
+
+```shell
+SKBUILD_CMAKE_DEFINE="LAP1015_NATIVE=ON" pixi reinstall hepattn
+```
+
+By default the extension is compiled for the baseline instruction set of its
+architecture, so one build runs on every x86-64 (or aarch64) machine. The
+`LAP1015_NATIVE` option adds `-march=native`. Use it only where the extension is
+built and run on the same CPU type: on a CPU without the build host's instructions,
+`import lap1015` crashes with `Fatal Python error: Illegal instruction`. This is
+what happened in CI, where the environment cache carries one runner's build to
+runners with other CPUs, and it also applies to an environment built on a login
+node and used on compute nodes.
+
+Three things guard the build, and are worth knowing about if you change it:
 
 - `strict-config = false` in [pyproject.toml](pyproject.toml) lets the build
   tolerate the `pixi-conda-environment` config-setting that pixi passes to the
@@ -108,6 +123,10 @@ Two things guard this, and are worth knowing about if you change the build:
 - `tests/matching/test_solvers.py::test_lap1015_releases_gil` fails if the
   installed extension holds the GIL, so a stale build is caught by the test suite
   rather than by a warning nobody reads.
+- `tests/matching/test_lap1015_build_flags.py` fails if `CMakeLists.txt` sets a
+  CPU-specific flag such as `-march=native` outside the `LAP1015_NATIVE` option. In
+  CI, the pixi cache key includes a hash of `CMakeLists.txt` and `src/lap1015/src`,
+  so a change to them rebuilds the extension instead of testing a cached one.
 
 Note that scikit-build-core's `editable.rebuild = true` is *not* used, though it
 looks like the obvious fix. Its import-time rebuild runs under the system `cmake`,

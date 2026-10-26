@@ -34,6 +34,10 @@ jobs:
         with:
           pixi-version: v0.50.2
           cache: true
+          # The cached environment holds the compiled lap1015 extension, and `pixi install` does not
+          # rebuild it when its C++ or CMake sources change. The default key does not cover those
+          # sources, so without this CI would test an extension built from older sources.
+          cache-key: pixi-lap1015-${{ hashFiles('CMakeLists.txt', 'src/lap1015/src/**') }}-
           locked: true
           environments: ci
 
@@ -55,6 +59,7 @@ jobs:
         with:
           pixi-version: v0.50.2
           cache: true
+          cache-key: pixi-lap1015-${{ hashFiles('CMakeLists.txt', 'src/lap1015/src/**') }}-
           locked: true
           environments: ci
 
@@ -90,6 +95,7 @@ jobs:
         with:
           pixi-version: v0.50.2
           cache: true
+          cache-key: pixi-lap1015-${{ hashFiles('CMakeLists.txt', 'src/lap1015/src/**') }}-
           locked: true
           environments: ci
 
