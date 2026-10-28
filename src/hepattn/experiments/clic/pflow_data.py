@@ -237,8 +237,8 @@ class CLICDataset(Dataset):
                 ],
                 -1,
             ),
-            "cosphi": torch.cat([track_cosphi, topo_phi], -1),
-            "sinphi": torch.cat([track_sinphi, topo_phi], -1),
+            "cosphi": torch.cat([track_cosphi, topo_cosphi], -1),
+            "sinphi": torch.cat([track_sinphi, topo_sinphi], -1),
             # interaction features
             "eta_int": torch.cat(
                 [
@@ -368,6 +368,13 @@ class CLICDataset(Dataset):
             ),
             "raw_eta": torch.cat([track_eta, topo_eta], -1),
             "raw_phi": torch.cat([track_phi, topo_phi], -1),
+            # Azimuth at the calorimeter: a track's phi_int (where it meets the calorimeter, after bending in the
+            # field; phi is at the perigee), a topo cluster's own phi. Puts a track next to its own showers.
+            "phi_calo": torch.cat([track_phi_int, topo_phi], -1),
+            # Pseudorapidity at the calorimeter, raw: a track's eta_int, the position eta of its extrapolation to the
+            # calorimeter front face (barrel r = 1.502 m or endcap |z| = 2.309 m), a topo cluster's own eta. With
+            # phi_calo, the GMP coordinates of configs/patch_gmp.yaml; not a learned node feature.
+            "eta_calo": torch.cat([track_eta_int, topo_eta], -1),
             "sinphi": torch.cat([track_sinphi, topo_sinphi], -1),
             "cosphi": torch.cat([track_cosphi, topo_cosphi], -1),
             "is_track": torch.cat(
@@ -488,6 +495,8 @@ class CLICDataset(Dataset):
             "node_pt": torch.zeros(self.max_nodes, dtype=torch.float32),
             "node_eta": torch.randn(self.max_nodes),
             "node_phi": torch.randn(self.max_nodes),
+            "node_phi_calo": torch.randn(self.max_nodes),
+            "node_eta_calo": torch.randn(self.max_nodes),
             "node_sinphi": torch.randn(self.max_nodes),
             "node_cosphi": torch.randn(self.max_nodes),
             "node_is_track": torch.zeros(self.max_nodes, dtype=torch.float32),
@@ -539,6 +548,8 @@ class CLICDataset(Dataset):
             "node_pt": data_dict["node_raw_features"]["raw_pt"],
             "node_eta": data_dict["node_raw_features"]["raw_eta"],
             "node_phi": data_dict["node_raw_features"]["raw_phi"],
+            "node_phi_calo": data_dict["node_raw_features"]["phi_calo"],
+            "node_eta_calo": data_dict["node_raw_features"]["eta_calo"],
             "node_sinphi": data_dict["node_raw_features"]["sinphi"],
             "node_cosphi": data_dict["node_raw_features"]["cosphi"],
             "node_is_track": data_dict["node_raw_features"]["is_track"],
