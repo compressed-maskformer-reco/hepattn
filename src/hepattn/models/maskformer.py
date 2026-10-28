@@ -4,7 +4,7 @@ import torch
 from torch import Tensor, nn
 
 from hepattn.models.decoder import MaskFormerDecoder
-from hepattn.models.encoder import sort_index
+from hepattn.models.encoder import periodic_sort_value, sort_index
 from hepattn.utils.model_utils import unmerge_inputs
 
 
@@ -20,6 +20,8 @@ class MaskFormer(nn.Module):
         pooling: nn.Module | None = None,
         matcher: nn.Module | None = None,
         input_sort_field: str | None = None,
+        input_sort_period: float | None = None,
+        input_coord_fields: list[str] | None = None,
         sorter: nn.Module | None = None,
         unified_decoding: bool = False,
         dynamic_query_source: str = "hit",
@@ -38,6 +40,11 @@ class MaskFormer(nn.Module):
             pooling: An optional pooling module used to aggregate features from the input constituents.
             matcher: A module used to match predictions to targets (e.g., using the Hungarian algorithm) for loss computation.
             input_sort_field: An optional key used to sort the input constituents (e.g., for windowed attention).
+            input_sort_period: If set, input_sort_field is periodic with this period (2pi for an azimuth) and the
+                constituents are ordered round the circle from the event's largest empty gap, so the order does not
+                split neighbours at the wrap point (see encoder.periodic_sort_value).
+            input_coord_fields: Optional [eta, phi] input fields, merged across the inputs like input_sort_field and passed
+                to the encoder as x_coords, for the geometric message passing of a patch encoder with gmp.
             sorter: An optional sorter module used to reorder input constituents before processing.
             unified_decoding: If True, inputs remain merged for task processing instead of being unmerged after encoding.
             dynamic_query_source: Name of the input type to use as the source for dynamic query initialization (default: "hit").
@@ -61,7 +68,15 @@ class MaskFormer(nn.Module):
         self.decoder.dynamic_query_source = dynamic_query_source
 
         assert not (input_sort_field and sorter), "Cannot specify both input_sort_field and sorter."
+        if input_sort_period is not None and (not input_sort_field or input_sort_period <= 0):
+            raise ValueError(f"input_sort_period needs input_sort_field and a positive period, got {input_sort_field!r}, {input_sort_period}")
+        if input_coord_fields is not None and len(input_coord_fields) != 2:
+            raise ValueError(f"input_coord_fields must be the [eta, phi] fields, got {input_coord_fields}")
+        # A sorter reorders the merged inputs before the encoder, which the coordinates would not follow
+        assert not (input_coord_fields and sorter), "Cannot specify both input_coord_fields and sorter."
         self.input_sort_field = input_sort_field
+        self.input_sort_period = input_sort_period
+        self.input_coord_fields = input_coord_fields
         self.sorter = sorter
         if self.sorter is not None:
             self.sorter.input_names = self.input_names
@@ -130,9 +145,18 @@ class MaskFormer(nn.Module):
 
         # Pass merged input constituents through the encoder
         x_sort_value = x.get(f"key_{self.input_sort_field}") if self.sorter is None else None
+        if x_sort_value is not None and self.input_sort_period is not None:
+            # The encoder and the decoder's kv_sort_idx both sort this value, so both see the same order
+            x_sort_value = periodic_sort_value(x_sort_value, x.get("key_valid"), self.input_sort_period)
         if x_sort_value is not None:
             x["key_sort_idx"] = sort_index(x_sort_value, x.get("key_valid"))
-        x["key_embed"] = self.encoder(x["key_embed"], x_sort_value=x_sort_value, kv_mask=x.get("key_valid"))
+        # The (B, S, 2) GMP coordinates in the merged slot order; the encoder sorts them with the tokens
+        encoder_kwargs = {}
+        if self.input_coord_fields:
+            encoder_kwargs["x_coords"] = torch.stack(
+                [torch.cat([inputs[f"{input_name}_{field}"] for input_name in self.input_names], dim=-1) for field in self.input_coord_fields], dim=-1
+            )
+        x["key_embed"] = self.encoder(x["key_embed"], x_sort_value=x_sort_value, kv_mask=x.get("key_valid"), **encoder_kwargs)
 
         # Keep dynamic query initialization compatible with unified decoding by ensuring
         # source_embed/source_valid refer to *post-encoder* features.

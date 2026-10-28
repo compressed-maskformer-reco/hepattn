@@ -1,0 +1,39 @@
+# Overlay on base.yaml: configs/patch.yaml (PHAT16) plus geometric message passing (GMP) in every encoder layer, before
+# the local patch attention, as in the reference PHATBlock (PHAT-JeT, arXiv:2605.21789; github.com/aaronw5/PHAT-JeT
+# 28f4e59, models/PHAT_JeT.py). The patches, their phi_calo order, the decoder, tasks, matching and the training recipe
+# are patch.yaml's and base.yaml's, unchanged; GMP adds 6 x 68,864 parameters at dim 256, kernel 3.
+#
+# GMP coordinates (decision updated 2026-10-22): calorimeter coordinates, node_eta_calo / node_phi_calo. A track's
+# (track_eta_int, track_phi_int): the position of its extrapolation to the calorimeter front face (barrel r = 1.502 m
+# or endcap |z| = 2.309 m; eta_int = asinh(z / r) of that point), not its perigee direction. A topo cluster's
+# barycentre (topo_eta, topo_phi). They are auxiliary inputs: the 27 node features are unchanged. node_phi_calo is
+# also the patch-order key.
+#
+# Our GMP is the reference operator (sum per cell, depthwise k x k conv, gather, Linear, LayerNorm(eps 1e-6), residual)
+# on a grid adapted to a full-azimuth detector: fixed eta in [-eta_max, eta_max] (not per-event min-shifted), phi
+# periodic over 2pi, padding masked; real nodes with |eta| > eta_max or non-finite coordinates skip GMP unchanged (not
+# clamped). That excludes ~0.7% of tracks: low-pT tracks whose extrapolation meets the endcap plane within ~1.3 cm of
+# the beam axis (|eta_int| up to ~10); no topo cluster.
+# Grid: the paper text's 3 x 3 kernel and 0.2 cell (the reference code trains with kernel 8, cell 0.05). On 992
+# validation events this neighbourhood holds a track's own leading cluster for 89% of tracks (72% below 1 GeV, 97% above)
+# with 6.1 other-particle neighbours per node; 5 x 5 gives 94% / 10.9, the reference 8 x 8 x 0.05 window 84% / 3.7
+# (patch-attention-env/analysis/gmp_implementation_20261020/calo_coords/kernel_reach_calo.json).
+name: clic_patch_p16_phicalo_gmp
+
+model:
+  model:
+    init_args:
+      input_sort_field: phi_calo
+      input_sort_period: 6.283185307179586 # 2 pi
+      input_coord_fields: [eta_calo, phi_calo] # node_eta_calo, node_phi_calo: the GMP coordinates
+      encoder:
+        init_args:
+          # PatchEncoderLayer; within each patch it runs the torch backend (flash-varlen cannot mask per patch)
+          attn_type: patch
+          patch_size: 16 # data.max_nodes (160) = 10 patches
+          patch_global: true
+          gmp:
+            kernel_size: 3
+            eta_cell: 0.2
+            phi_cells: 32 # phi cell 2pi / 32 = 0.196
+            eta_max: 5.2 # clusters reach |eta| 4.995 (4959 val events); tracks beyond it are near-beam endcap hits

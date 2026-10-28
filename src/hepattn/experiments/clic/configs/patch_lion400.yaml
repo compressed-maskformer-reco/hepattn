@@ -1,0 +1,52 @@
+# PHAT16 without GMP (patch.yaml) with the same 400-epoch Lion recipe as patch_gmp_lion400.yaml: the like-for-like
+# control. The model section must stay identical to patch.yaml (tests/experiments/clic/test_clic.py checks it).
+#
+# Overlay on base.yaml: patch attention (PHAT-JeT, arXiv:2605.21789, without its geometric message passing) in the
+# encoder only. Each layer attends exactly within patches of 16 consecutive constituents, then the masked-mean patch
+# tokens and the register tokens attend to each other and each patch token is broadcast back to its constituents.
+# The encoder still returns one embedding per constituent in input order, so the decoder, tasks and matching are
+# base.yaml's, unchanged.
+#
+# Constituents are ordered by their azimuth at the calorimeter (phi_calo: a track's phi_int, a topo cluster's phi),
+# going round the circle from each event's largest empty phi gap (input_sort_period), so that a track and its own
+# showers, and nodes either side of phi = +-pi, tend to share a patch. On 4959 validation events this puts 65% of the
+# node pairs of a target particle in one patch of 16, against 54% for raw (perigee) phi and 21% for a random order.
+#
+# ---- Training recipe (overrides base.yaml). Approved by the group meeting (2026-10-22): Lion, weight decay 0.1, peak
+# LR ~6.2e-4, max_epochs 400. Every setting marked PENDING is a proposed default awaiting the user's approval.
+name: clic_patch_p16_phicalo_lion400
+
+trainer:
+  max_epochs: 400 # approved. OneCycleLR spans all 400 epochs (total_steps = estimated_stepping_batches), so a resume
+                  # must keep max_epochs, devices, batch_size and num_train identical
+  precision: bf16-mixed # as base.yaml and the PHAT16 3-epoch run
+  gradient_clip_val: 0.1 # PENDING: base.yaml's, kept for comparability; it fired on 100% of PHAT16 steps (median
+                         # pre-clip norm 7.6), so with Lion it acts as a gradient normalisation into the momentum
+  check_val_every_n_epoch: 1 # as base.yaml: ~10 s per validation of 4959 events
+
+data:
+  batch_size: 512 # PENDING: per GPU, x 2 GPUs (launcher --trainer.devices 2) = 1024 global, the memory-validated PHAT16
+                  # setting (19.7 GB of 40 GB). The #10 survey recipe used 2048 global; 6.2e-4 is untested at 1024
+
+model:
+  optimizer: Lion # approved; lion_pytorch 0.2.3, betas (0.9, 0.99), decay p *= 1 - lr * wd on every parameter
+  lrs_config:
+    initial: 1e-6 # PENDING: OneCycle start LR (div_factor = max / initial = 620), as base.yaml and #10
+    max: 6.2e-4 # approved peak LR (base.yaml: 8e-5)
+    end: 1e-6 # PENDING: final LR, as base.yaml and #10
+    pct_start: 0.05 # PENDING: 5% warm-up = 20 epochs = ~19,440 steps at 972 steps per epoch, as #10
+    weight_decay: 0.1 # approved (base.yaml: 1e-4); per-step decay at the peak 6.2e-5, on all parameters
+    skip_scheduler: false
+    cycle_momentum: false # PENDING: keep Lion's beta1 at 0.9 (base.yaml cycles it 0.85-0.95 against the LR), as #10
+
+  # ---- Architecture: identical to patch.yaml
+  model:
+    init_args:
+      input_sort_field: phi_calo
+      input_sort_period: 6.283185307179586 # 2 pi
+      encoder:
+        init_args:
+          # PatchEncoderLayer; within each patch it runs the torch backend (flash-varlen cannot mask per patch)
+          attn_type: patch
+          patch_size: 16 # data.max_nodes (160) = 10 patches
+          patch_global: true

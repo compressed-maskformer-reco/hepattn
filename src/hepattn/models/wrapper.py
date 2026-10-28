@@ -157,6 +157,8 @@ class ModelWrapper(LightningModule):
                 div_factor=self.lrs_config["max"] / self.lrs_config["initial"],
                 final_div_factor=self.lrs_config["initial"] / self.lrs_config["end"],
                 pct_start=float(self.lrs_config["pct_start"]),
+                # OneCycleLR cycles AdamW's/Lion's beta1 against the LR unless this is off
+                cycle_momentum=self.lrs_config.get("cycle_momentum", True),
             )
             sch = {"scheduler": sch, "interval": "step"}
             return [opt], [sch]

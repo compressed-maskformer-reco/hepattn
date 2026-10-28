@@ -1,0 +1,68 @@
+# PHAT16 + GMP (patch_gmp.yaml) with the 400-epoch Lion recipe. The model section must stay identical to patch_gmp.yaml
+# (tests/experiments/clic/test_clic.py checks it).
+#
+# Overlay on base.yaml: configs/patch.yaml (PHAT16) plus geometric message passing (GMP) in every encoder layer, before
+# the local patch attention, as in the reference PHATBlock (PHAT-JeT, arXiv:2605.21789; github.com/aaronw5/PHAT-JeT
+# 28f4e59, models/PHAT_JeT.py). The patches, their phi_calo order, the decoder, tasks, matching and the training recipe
+# are patch.yaml's and base.yaml's, unchanged; GMP adds 6 x 68,864 parameters at dim 256, kernel 3.
+#
+# GMP coordinates (decision updated 2026-10-22): calorimeter coordinates, node_eta_calo / node_phi_calo. A track's
+# (track_eta_int, track_phi_int): the position of its extrapolation to the calorimeter front face (barrel r = 1.502 m
+# or endcap |z| = 2.309 m; eta_int = asinh(z / r) of that point), not its perigee direction. A topo cluster's
+# barycentre (topo_eta, topo_phi). They are auxiliary inputs: the 27 node features are unchanged. node_phi_calo is
+# also the patch-order key.
+#
+# Our GMP is the reference operator (sum per cell, depthwise k x k conv, gather, Linear, LayerNorm(eps 1e-6), residual)
+# on a grid adapted to a full-azimuth detector: fixed eta in [-eta_max, eta_max] (not per-event min-shifted), phi
+# periodic over 2pi, padding masked; real nodes with |eta| > eta_max or non-finite coordinates skip GMP unchanged (not
+# clamped). That excludes ~0.7% of tracks: low-pT tracks whose extrapolation meets the endcap plane within ~1.3 cm of
+# the beam axis (|eta_int| up to ~10); no topo cluster.
+# Grid: the paper text's 3 x 3 kernel and 0.2 cell (the reference code trains with kernel 8, cell 0.05). On 992
+# validation events this neighbourhood holds a track's own leading cluster for 89% of tracks (72% below 1 GeV, 97% above)
+# with 6.1 other-particle neighbours per node; 5 x 5 gives 94% / 10.9, the reference 8 x 8 x 0.05 window 84% / 3.7
+# (patch-attention-env/analysis/gmp_implementation_20261020/calo_coords/kernel_reach_calo.json).
+#
+# ---- Training recipe (overrides base.yaml). Approved by the group meeting (2026-10-22): Lion, weight decay 0.1, peak
+# LR ~6.2e-4, max_epochs 400. Every setting marked PENDING is a proposed default awaiting the user's approval.
+name: clic_patch_p16_phicalo_gmp_lion400
+
+trainer:
+  max_epochs: 400 # approved. OneCycleLR spans all 400 epochs (total_steps = estimated_stepping_batches), so a resume
+                  # must keep max_epochs, devices, batch_size and num_train identical
+  precision: bf16-mixed # as base.yaml and the PHAT16 3-epoch run
+  gradient_clip_val: 0.1 # PENDING: base.yaml's, kept for comparability; it fired on 100% of PHAT16 steps (median
+                         # pre-clip norm 7.6), so with Lion it acts as a gradient normalisation into the momentum
+  check_val_every_n_epoch: 1 # as base.yaml: ~10 s per validation of 4959 events
+
+data:
+  batch_size: 512 # PENDING: per GPU, x 2 GPUs (launcher --trainer.devices 2) = 1024 global, the memory-validated PHAT16
+                  # setting (19.7 GB of 40 GB). The #10 survey recipe used 2048 global; 6.2e-4 is untested at 1024
+
+model:
+  optimizer: Lion # approved; lion_pytorch 0.2.3, betas (0.9, 0.99), decay p *= 1 - lr * wd on every parameter
+  lrs_config:
+    initial: 1e-6 # PENDING: OneCycle start LR (div_factor = max / initial = 620), as base.yaml and #10
+    max: 6.2e-4 # approved peak LR (base.yaml: 8e-5)
+    end: 1e-6 # PENDING: final LR, as base.yaml and #10
+    pct_start: 0.05 # PENDING: 5% warm-up = 20 epochs = ~19,440 steps at 972 steps per epoch, as #10
+    weight_decay: 0.1 # approved (base.yaml: 1e-4); per-step decay at the peak 6.2e-5, on all parameters
+    skip_scheduler: false
+    cycle_momentum: false # PENDING: keep Lion's beta1 at 0.9 (base.yaml cycles it 0.85-0.95 against the LR), as #10
+
+  # ---- Architecture: identical to patch_gmp.yaml
+  model:
+    init_args:
+      input_sort_field: phi_calo
+      input_sort_period: 6.283185307179586 # 2 pi
+      input_coord_fields: [eta_calo, phi_calo] # node_eta_calo, node_phi_calo: the GMP coordinates
+      encoder:
+        init_args:
+          # PatchEncoderLayer; within each patch it runs the torch backend (flash-varlen cannot mask per patch)
+          attn_type: patch
+          patch_size: 16 # data.max_nodes (160) = 10 patches
+          patch_global: true
+          gmp:
+            kernel_size: 3
+            eta_cell: 0.2
+            phi_cells: 32 # phi cell 2pi / 32 = 0.196
+            eta_max: 5.2 # clusters reach |eta| 4.995 (4959 val events); tracks beyond it are near-beam endcap hits
