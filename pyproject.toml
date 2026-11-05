@@ -45,6 +45,7 @@ dependencies = [
 [dependency-groups]
 clic = ["pathos", "vector", "fastjet", "energyflow"] # has problems on isambard
 tide = ["numba>=0.61.2"] # has problems on isambard
+hgq = ["keras>=3.8,<4", "hgq2>=0.1.9,<0.2"] # HGQ2 quantization-aware hybrid (hepattn.keras), keras on the torch backend
 fa2 = ["flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.4.17/flash_attn-2.8.3%2Bcu128torch2.9-cp312-cp312-linux_x86_64.whl"]
 
 [build-system]
@@ -93,7 +94,8 @@ isambard = { features = ["gpu"] }
 cpu = { features = ["cpu"] }
 clic = { features = ["gpu", "fa2", "clic"] }
 tide = { features = ["tide"] }
-ci = { features = ["cpu", "clic", "tide"]}
+hgq = { features = ["gpu", "hgq"] }
+ci = { features = ["cpu", "clic", "tide", "hgq"]}
 
 [tool.pixi.system-requirements]
 libc = "2.28"
